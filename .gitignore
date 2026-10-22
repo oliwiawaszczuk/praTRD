@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+*.app
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# PyInstaller (CI)
+app/sidecar/sidecar
+app/sidecar/sidecar.exe
+app/sidecar/dist/
+app/sidecar/build/
+
+# Node / SvelteKit
+node_modules/
+app/build/
+app/.svelte-kit/
+
+# Rust / Tauri
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+
+# Dane medyczne — NIGDY do repo (DICOM/NIfTI mogą zawierać dane pacjenta)
+source/*
+!source/.gitkeep
+*.dcm
+*.nii
+*.nii.gz
+*.nrrd
+
+# Dane per-user aplikacji
+workspaces/
+app_settings.json
+app_docs.json
+
+# IDE / Claude
+.idea/
+.vscode/
+.claude/settings.local.json
+
+# Logi
+*.log

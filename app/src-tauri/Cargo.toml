@@ -1,0 +1,31 @@
+[package]
+name = "pratrd"
+version = "0.0.1"
+description = "praTRD — DICOM 3D + node graph"
+authors = ["praoliwia"]
+edition = "2021"
+
+[lib]
+# `_lib` suffix avoids a bin/lib name clash on Windows (cargo#8519).
+name = "pratrd_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# Release CI builds: launch the PyInstaller sidecar bundled in resources and keep user
+# data in the OS app-data dir. Without it (local dev): `uv run python -m pratrd` with
+# data in the project root.
+pyinstaller-sidecar = []
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

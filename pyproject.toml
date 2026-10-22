@@ -1,0 +1,57 @@
+[project]
+name = "pratrd"
+version = "0.0.1"
+description = "praTRD — DICOM 3D + node graph (Python sidecar)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "numpy>=2.1",
+    "pydicom>=3.0",
+    "pylibjpeg>=2.0",
+    "pylibjpeg-libjpeg>=2.3",
+    "pylibjpeg-openjpeg>=2.4",
+    "SimpleITK>=2.4",
+    "zarr>=3.0",
+    "numcodecs>=0.15",
+    "scikit-image>=0.25",
+    "scipy>=1.14",
+    "nibabel>=5.3",
+    "highdicom>=0.23",
+    "websockets>=15",
+    "pillow>=11",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8.3",
+    "pyinstaller>=6.11",
+    "httpx2>=2.16.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pratrd"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# skimage's marching cubes still sets ndarray.shape (deprecated in NumPy 2.5) — not ours
+filterwarnings = ["ignore:Setting the shape on a NumPy array:DeprecationWarning:skimage"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Body"]
+
+[tool.ruff.lint.per-file-ignores]
+# node descriptions are user-facing Polish sentences — not wrapped mid-phrase
+"src/pratrd/nodes/*" = ["E501"]

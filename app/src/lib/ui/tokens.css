@@ -1,0 +1,170 @@
+/* Design tokens — the praSzczur look, defined once (docs/design/ui-tokens.md).
+   Components use var(--…) only; no raw hex values in component styles. */
+
+:root {
+  --bg-app: #333;
+  --bg-boot: #222;
+  --bg-panel: #2a2a2a;
+  --bg-panel-2: #262626;
+  --bg-deep: #1a1a1a;
+  --bg-deepest: #111;
+
+  --accent: #ffc951;
+  --accent-a10: rgba(255, 201, 81, 0.1);
+  --accent-a15: rgba(255, 201, 81, 0.15);
+  --accent-a25: rgba(255, 201, 81, 0.25);
+  --accent-a30: rgba(255, 201, 81, 0.3);
+  --accent-a40: rgba(255, 201, 81, 0.4);
+  --accent-a70: rgba(255, 201, 81, 0.7);
+  --accent-a90: rgba(255, 201, 81, 0.9);
+
+  --text: #e0e0e0;
+  --text-strong: #f0f0f0;
+  --text-dim-1: rgba(255, 255, 255, 0.6);
+  --text-dim-2: rgba(255, 255, 255, 0.45);
+  --text-dim-3: rgba(255, 255, 255, 0.35);
+  --text-dim-4: rgba(255, 255, 255, 0.22);
+
+  --line-1: rgba(255, 255, 255, 0.07);
+  --line-2: rgba(255, 255, 255, 0.1);
+  --line-3: rgba(255, 255, 255, 0.12);
+  --hover: rgba(255, 255, 255, 0.05);
+  --shade: rgba(0, 0, 0, 0.2);
+  --backdrop: rgba(0, 0, 0, 0.5);
+
+  --danger: #ff6b6b;
+  --danger-a15: rgba(255, 107, 107, 0.15);
+  --ok: #7bc47f;
+
+  /* Port kinds (node graph) — deliberately not in the accent hue. */
+  --port-wolumen: #5b9bd5;
+  --port-segmentacja: #b48ce0;
+  --port-segment: #7bc47f;
+  --port-punkty: #f2994a;
+  --port-tabela: #f06292;
+  --port-liczba: #90a4ae;
+  --port-mesh: #4db6ac;
+  --port-transformacja: #c0ca33;
+
+  --font: "JetBrains Mono", ui-monospace, monospace;
+  --fs-xs: 0.66rem;
+  --fs-sm: 0.72rem;
+  --fs-md: 0.78rem;
+  --fs-lg: 0.9rem;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --t-fast: 0.15s;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  /* WebKit (Tauri on macOS/Linux) still needs the prefixed property */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Shared control styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--bg-deep);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim-1);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-3);
+  background: var(--hover);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn.primary {
+  background: var(--accent-a10);
+  border-color: var(--accent-a30);
+  color: var(--accent);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-a15);
+  border-color: var(--accent-a40);
+}
+.btn.danger {
+  color: var(--danger);
+  border-color: rgba(255, 107, 107, 0.45);
+}
+.btn.danger:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-a15);
+}
+
+.input {
+  width: 100%;
+  padding: 6px 9px;
+  font-size: var(--fs-md);
+  background: var(--bg-deep);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  outline: none;
+  color: var(--text);
+}
+.input:focus {
+  border-color: var(--accent-a40);
+}
