@@ -1,10 +1,13 @@
 // Import flow: paths → scan job → candidate dialog → one import job per series.
-// Shared by the toolbar buttons and window-wide file drop.
+// Shared by the toolbar buttons and window-wide file drop. Mesh files (STL / OBJ / PLY) skip
+// the scan and go straight to the workspace's mesh library.
 
 import { sendJson } from "#lib/core/api.svelte.ts";
 import { waitJob } from "#lib/core/events.svelte.ts";
 import { activeWorkspaceId } from "#lib/core/workspace.svelte.ts";
+import { importMeshes, isMeshPath } from "#lib/core/meshes.svelte.ts";
 import { showError, showInfo } from "#lib/ui/dialogs.svelte.ts";
+import { toast } from "#lib/ui/toast.svelte.ts";
 
 export interface CandidateSummary {
   id: number;
@@ -39,7 +42,22 @@ export const closeScan = (): void => {
   pending = null;
 };
 
+async function importMeshFiles(paths: string[]): Promise<void> {
+  try {
+    const r = await importMeshes(paths);
+    for (const m of r.added) toast(`Mesh „${m.name}” w bibliotece — node „Plik mesha” w Scenie`, { icon: "mesh", ms: 5000 });
+    if (r.errors.length) await showError("Nie udało się wczytać mesha", r.errors.map((e) => e.error).join("\n"));
+  } catch (e) {
+    await showError("Nie udało się wczytać mesha", e);
+  }
+}
+
 export async function scanPaths(paths: string[]): Promise<void> {
+  const meshes = paths.filter(isMeshPath);
+  if (meshes.length) {
+    await importMeshFiles(meshes);
+    paths = paths.filter((p) => !isMeshPath(p));
+  }
   if (!paths.length || scanning) return;
   scanning = true;
   try {

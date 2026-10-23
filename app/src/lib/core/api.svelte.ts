@@ -5,8 +5,9 @@ import { untrack } from "svelte";
 import { inTauri } from "./tauri.ts";
 
 // The Tauri shell picks a free port per launch (see lib.rs `sidecar_port`). In a plain
-// browser (`pnpm dev` + sidecar started by hand) the default 7433 is used.
-const DEFAULT_PORT = 7433;
+// browser (`pnpm dev` + sidecar started by hand) 7433, or VITE_PRATRD_PORT when another
+// local app already holds that port.
+const DEFAULT_PORT = Number(import.meta.env.VITE_PRATRD_PORT ?? 7433);
 let base = `http://127.0.0.1:${DEFAULT_PORT}`;
 
 export const sidecarBase = (): string => base;

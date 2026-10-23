@@ -129,6 +129,12 @@ class _Histogram:
             self.counts = np.zeros(4096, dtype=np.int64)
 
     def add(self, slab: np.ndarray) -> None:
+        if self.integer and self.counts.size == 2:
+            # only two values (a binary mask): counting the upper one is enough, and
+            # count_nonzero is ~100× faster than bincount
+            hi = np.count_nonzero(slab) if self.vmin == 0 else np.count_nonzero(slab == self.vmax)
+            self.counts += (slab.size - hi, hi)
+            return
         # Piecewise: bincount needs an intp copy of its input — on a whole 128-slice slab
         # that alone was a 268 MB spike.
         flat = slab.reshape(-1)
@@ -211,8 +217,13 @@ class VolumeWriter:
     def abort(self) -> None:
         shutil.rmtree(self.path, ignore_errors=True)
 
-    def finish(self, report: Callable[[float], None], attrs: dict[str, Any]) -> dict[str, Any]:
-        """Pyramid + stats + attributes, then atomically publish. report(0..1)."""
+    def finish(
+        self,
+        report: Callable[[float], None],
+        attrs: dict[str, Any] | Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Pyramid + stats + attributes, then atomically publish. report(0..1).
+        `attrs` may be a function of the computed stats (e.g. a label census in the info)."""
         self._flush()
         nk = self.geometry.shape_kji[0]
         if self._k != nk:
@@ -287,7 +298,7 @@ class VolumeWriter:
             "dtype": self.dtype.str,
             "levels": [g.to_json() for g in levels],
             "stats": stats,
-            **attrs,
+            **(attrs(stats) if callable(attrs) else attrs),
         }
         self.group.attrs["pratrd"] = meta
         report(1.0)

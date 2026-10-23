@@ -334,3 +334,62 @@ def test_dicom_seg_import_aligns_with_series(tmp_path: Path) -> None:
     ev = Evaluator("w", ws, lib, Hub())
     out, _ = run(ev, [node("l", "segmentacja/import", volume=vid)], [], "l")
     assert out["kind"] == "segmentacja" and out["info"]["labels"][0]["name"] == "Aneurysm"
+
+
+def _cut_run(ev, vid, cut):
+    out, _ = run(
+        ev,
+        [
+            node("s", "wolumen/seria", volume=vid),
+            node("t", "segmentacja/prog", lo=500, hi=5000),
+            node("e", "segmentacja/edycja", strokes=[cut]),
+        ],
+        [edge("s", "t"), edge("t", "e")],
+        "e",
+    )
+    return arr(ev, out) > 0
+
+
+IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+AROUND_BIG = [[10, 15], [37.5, 15], [37.5, 45], [10, 45]]  # x (= i) 10..37.5, y (= j) 15..45
+
+
+def test_scissors_2d_through_all_slices(env) -> None:
+    ev, vid, parts, _ = env
+    m = _cut_run(
+        ev, vid, {"kind": "cut", "mode": "erase", "M": IDENTITY, "poly": AROUND_BIG, "z": None}
+    )
+    np.testing.assert_array_equal(m, parts["small"] | parts["shell"])
+
+
+def test_scissors_one_slice_and_keep(env) -> None:
+    ev, vid, parts, _ = env
+    one = _cut_run(
+        ev,
+        vid,
+        {"kind": "cut", "mode": "erase", "M": IDENTITY, "poly": AROUND_BIG, "z": [29.5, 30.5]},
+    )
+    want = parts["big"] | parts["small"] | parts["shell"]
+    want[30] &= ~parts["big"][30]  # only slice k = 30 of the big sphere is cut
+    np.testing.assert_array_equal(one, want)
+    keep = _cut_run(
+        ev,
+        vid,
+        {
+            "kind": "cut",
+            "mode": "keep",
+            "M": IDENTITY,
+            "poly": [[64, 24], [77, 24], [77, 37], [64, 37]],
+            "z": None,
+        },
+    )
+    np.testing.assert_array_equal(keep, parts["small"])
+
+
+def test_scissors_perspective_from_3d_view(env) -> None:
+    ev, vid, parts, _ = env
+    # camera at (25, -100, 30) looking along +y, up +z: x_cam = x - 25, y_cam = z - 30, w = y + 100
+    M = [1, 0, 0, -25, 0, 0, 1, -30, 0, 1, 0, 100, 0, 1, 0, 100]
+    poly = [[-0.1, -0.1], [0.1, -0.1], [0.1, 0.1], [-0.1, 0.1]]
+    m = _cut_run(ev, vid, {"kind": "cut", "mode": "erase", "M": M, "poly": poly, "z": None})
+    np.testing.assert_array_equal(m, parts["small"] | parts["shell"])

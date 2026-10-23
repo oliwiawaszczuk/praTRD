@@ -4,6 +4,7 @@
 import type { VolumeMeta } from "#lib/core/library.svelte.ts";
 import type { Vec3 } from "./geometry.ts";
 import type { Markup, MarkupType } from "./markups.ts";
+import type { Cut, CutDepth, CutOp, CutShape } from "./cuts.ts";
 
 export interface OverlaySpec {
   ref: string; // label volume (segment / segmentacja result)
@@ -14,18 +15,30 @@ export interface OverlaySpec {
   strokes?: number; // edit node: strokes contained in this result
 }
 
-export type SegTool = "seed" | "brush" | "erase" | MarkupType;
+/** A surface shown in every view: shaded in 3-D, its cut with the slice plane in 2-D. */
+export interface MeshSpec {
+  ref: string;
+  color: string;
+  name: string;
+}
+
+export type SegTool = "seed" | "brush" | "erase" | "cut" | MarkupType;
 
 export interface MarkupGroup {
   nodeId: string;
   items: Markup[];
 }
 
-export interface Stroke {
+/** A brush stroke (spheres along a path). */
+export interface BrushStroke {
+  kind?: undefined;
   p: Vec3[];
   r: number; // mm
   mode: "add" | "erase";
 }
+
+/** Anything the edit node replays in order: brush strokes and scissors cuts. */
+export type Stroke = BrushStroke | Cut;
 
 /** How a 2-D view maps the world (handed to its overlay layers). */
 export interface ViewProj {
@@ -50,6 +63,8 @@ export interface SliceLayers {
   outline: boolean;
   tool: SegTool | null;
   brushR: number;
+  /** scissors settings (shape drawn, what happens inside, depth in 2-D) */
+  cut: { shape: CutShape; op: CutOp; depth: CutDepth };
   /** committed strokes not yet in the shown result (drawn as instant feedback) */
   pending: Stroke[];
   seeds: Vec3[];
@@ -60,6 +75,10 @@ export interface SliceLayers {
   markups: MarkupGroup[];
   /** highlighted markup (hovered in the node card) */
   focusMarkup: string | null;
+  /** surfaces (the displayed mesh node) */
+  meshes: MeshSpec[];
+  /** 3-D surface opacity (0..1) */
+  meshOpacity: number;
   onSeed?: (w: Vec3) => void;
   onStroke?: (s: Stroke) => void;
   onMarkups?: (nodeId: string, items: Markup[]) => void;
@@ -72,12 +91,15 @@ export const NO_LAYERS: SliceLayers = {
   outline: true,
   tool: null,
   brushR: 3,
+  cut: { shape: "lasso", op: "erase", depth: "all" },
   pending: [],
   seeds: [],
   color: "#7bc47f",
   toolNode: null,
   markups: [],
   focusMarkup: null,
+  meshes: [],
+  meshOpacity: 1,
 };
 
 export function hexRgb(hex: string): [number, number, number] {

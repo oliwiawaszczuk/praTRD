@@ -198,3 +198,12 @@ def test_params_are_clamped_and_defaulted() -> None:
         "sigma": 10.0,
         "radius": 1.0,
     }
+
+
+def test_cache_budget_never_zero() -> None:
+    from pratrd.api.graphs import _CACHE_BUDGET_DEFAULT, cache_budget
+
+    assert cache_budget({}) == _CACHE_BUDGET_DEFAULT
+    assert cache_budget({"cacheBytes": 50 * 2**30}) == 50 * 2**30
+    for bad in (0, -2147483648, 1073741824 // 2, "x", None):
+        assert cache_budget({"cacheBytes": bad}) == _CACHE_BUDGET_DEFAULT

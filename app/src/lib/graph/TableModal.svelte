@@ -6,6 +6,7 @@
   import { bestRun } from "./evaluation.svelte.ts";
   import TableChart from "./TableChart.svelte";
   import { exportCsv, usedColumns } from "./tables.ts";
+  import { copyValue } from "#lib/core/notePad.svelte.ts";
   import { closeTable, tableOf, tableView } from "./tableView.svelte.ts";
 
   const open = $derived(tableView.open);
@@ -71,7 +72,11 @@
             {#each table.rows as r, n (n)}
               <tr>
                 {#each cols as c (c.key)}
-                  <td class:num={typeof r[c.key] === "number"}>
+                  <td
+                    class:num={typeof r[c.key] === "number"}
+                    title="Klik: kopiuj · ⌘/Ctrl+klik: do przypiętej notatki"
+                    onclick={(e) => copyValue(c.key === "name" ? fmt(r[c.key]) : `${r.name ? `${r.name} · ` : ""}${c.label}: ${fmt(r[c.key])}${c.unit ? ` ${c.unit}` : ""}`, e)}
+                  >
                     {#if c.key === "name" && r.color}<i style:background={r.color as string}></i>{/if}{fmt(r[c.key])}
                   </td>
                 {/each}
@@ -178,6 +183,9 @@
     border-bottom: 1px solid var(--line-1);
     color: var(--text);
     white-space: nowrap;
+  }
+  td {
+    cursor: copy;
   }
   td.num {
     text-align: right;

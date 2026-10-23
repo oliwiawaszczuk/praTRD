@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { nodeDoc } from "#lib/tabs/dokumentacja/appdocs.svelte.ts";
   import { DOMAIN_COLOR, domainLabels, nodeTypes } from "./registry.svelte.ts";
   import type { NodeTypeSchema } from "./types.ts";
 
@@ -47,7 +48,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="item"
-            title={t.description}
+            title={nodeDoc(t.id, t.description)}
             onpointerdown={(e) => onDown(e, t)}
             onpointermove={onMove}
             onpointerup={onUp}

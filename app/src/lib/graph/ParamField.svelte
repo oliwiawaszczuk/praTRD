@@ -1,6 +1,11 @@
 <script lang="ts">
   // One parameter widget, generated from the node-type schema.
   import { libraryVolumes } from "#lib/core/library.svelte.ts";
+  import { importMeshes, libraryMeshes } from "#lib/core/meshes.svelte.ts";
+  import { inTauri, pickMeshFiles } from "#lib/core/tauri.ts";
+  import { showError } from "#lib/ui/dialogs.svelte.ts";
+  import Icon from "#lib/ui/Icon.svelte";
+  import ProgressRing from "#lib/ui/ProgressRing.svelte";
   import type { ParamSchema } from "./types.ts";
 
   let { p, value, onchange }: { p: ParamSchema; value: unknown; onchange: (v: unknown) => void } = $props();
@@ -8,6 +13,22 @@
   const num = $derived(Number(value ?? p.default));
   const decimals = $derived(p.type === "int" ? 0 : Math.max(0, -Math.floor(Math.log10(p.step || 0.1))));
   const stop = (e: Event) => e.stopPropagation();
+
+  let importing = $state(false);
+  async function importMesh(): Promise<void> {
+    const paths = await pickMeshFiles();
+    if (!paths.length) return;
+    importing = true;
+    try {
+      const r = await importMeshes(paths);
+      if (r.errors.length) await showError("Nie udało się wczytać", r.errors.map((e) => e.error).join("\n"));
+      if (r.added.length) onchange(r.added[r.added.length - 1].id);
+    } catch (e) {
+      await showError("Nie udało się wczytać", e);
+    } finally {
+      importing = false;
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -52,6 +73,14 @@
       <option value="" disabled>— wybierz serię —</option>
       {#each libraryVolumes() as v (v.id)}<option value={v.id}>{v.name}</option>{/each}
     </select>
+  {:else if p.type === "mesh"}
+    <select class="sel" value={value ?? ""} onchange={(e) => onchange(e.currentTarget.value)}>
+      <option value="" disabled>— wybierz mesh —</option>
+      {#each libraryMeshes() as m (m.id)}<option value={m.id}>{m.name} · {m.format.toUpperCase()}</option>{/each}
+    </select>
+    <button class="pick" title="Wczytaj plik STL / OBJ / PLY" disabled={!inTauri() || importing} onclick={importMesh}>
+      {#if importing}<ProgressRing size={13} />{:else}<Icon name="folderIn" size={13} />{/if}
+    </button>
   {/if}
 </div>
 
@@ -124,6 +153,19 @@
     color: var(--accent);
     border-color: var(--accent-a30);
     background: var(--accent-a10);
+  }
+  .pick {
+    display: flex;
+    padding: 3px;
+    color: var(--text-dim-2);
+    background: var(--bg-deepest);
+    border: 1px solid var(--line-1);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .pick:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent-a30);
   }
   input[type="checkbox"] {
     accent-color: var(--accent);

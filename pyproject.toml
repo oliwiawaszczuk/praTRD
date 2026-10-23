@@ -1,6 +1,6 @@
 [project]
 name = "pratrd"
-version = "0.0.1"
+version = "0.1.0"
 description = "praTRD — DICOM 3D + node graph (Python sidecar)"
 requires-python = ">=3.13,<3.14"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
     "highdicom>=0.23",
     "websockets>=15",
     "pillow>=11",
+    "fast-simplification>=0.2.0",
 ]
 
 [dependency-groups]

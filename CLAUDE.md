@@ -6,7 +6,7 @@
 Łączy praSzczur (workspace'y, ustawienia, styl UI, Node Graph), praHand3D (inspiracja) i 3D Slicer (funkcje).
 Plan i etapy: `docs/02-plan.md` (zatwierdzony). Decyzje: `docs/01-qa.md`. Postęp: `CHANGELOG.md`.
 
-**Stan: E0–E5 zrobione (fundament, dane, viewporty, node graph, segmentacja, pomiary) → następny E6 Zakładki z praSzczur.**
+**Stan: 0.1.0 gotowe (E0–E7) + E8 Mesh + E9 Filtry. Dalej wg planu: AI segmentacja → rejestracja i fuzja.**
 
 ## Zasady pracy
 
@@ -48,6 +48,8 @@ src/pratrd/      pakiet Python: config, jsonio (atomowy zapis), workspaces (reje
                  events (EventHub → WebSocket), jobs (JobManager: kolejki io/heavy, postęp, anulowanie),
   dicom/         frames (nagłówek → ramki), stack (sortowanie, fazy, geometria, dtype, ostrzeżenia),
                  scan (folder → Candidate), decode (w procesach puli), anonymize, tags
+  meshes/        store (format katalogu .mesh, LRU MESHES, LOD, miniatura), io (STL/OBJ/PLY),
+                 ops (marching cubes, Taubin, decymacja, wokselizacja), library (meshes/index.json)
   volumes/       geometry (IJK↔LPS), store (Zarr: writer, piramida, statystyki, read_slice),
                  decode_pool, files (NIfTI/NRRD), importer, library (index.json per workspace)
   api/           app (lifespan, state), system, workspaces, app_settings, volumes, jobs (+ /ws)
@@ -92,6 +94,8 @@ app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
 - Łączenie masek z różnych siatek → `_on_grid()` (nearest), nie zakładać równych kształtów.
 - Front: `viewport/layers.ts` (OverlaySpec, SliceLayers), nakładka i próg w `SliceRenderer`,
   narzędzia w `graph/segTools.svelte.ts`, edytory kart w `graph/SegWidgets.svelte`.
+- Parametr `strokes` węzła Edycja = kule pędzla ORAZ cięcia nożyc `{kind:"cut", mode, M, poly, z}`
+  (M: świat → x,y,z,w; wielokąt w x/w, y/w) — ta sama definicja w `viewport/cuts.ts` i `_cut`.
 - Pociągnięcia oczekujące = `layers.pending` (strokes z parametrów węzła, których wynik jeszcze
   nie zawiera — `info.strokes`); 2D rysuje je w shaderze (`viewport/strokes.ts` → tekstura edycji),
   3D zmienia dane nakładki w miejscu (`VolumeRenderer3D.paint/pick`).
@@ -99,6 +103,34 @@ app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
   `VOLUME_KINDS`, inaczej po restarcie dociera do węzłów jako None.
 - Stan, który musi trafić do renderera (np. LUT), wgrywać w `draw()` gdy się zmienił — nie z
   efektu, który może się wykonać przed utworzeniem renderera.
+
+## Mesh (KONWENCJE)
+
+- Mesh = `MeshValue(kind="mesh")` — uchwyt do katalogu `<ref>.mesh/` (`verts.bin` f32, `normals.bin`
+  f32, `cells.bin` u32 w układzie VTK `3,a,b,c`, `meta.json`); wierzchołki ZAWSZE świat LPS mm.
+  12 hex = biblioteka (`meshes/`, import plików), 24 hex = wynik node'a (`cache/`).
+- Wynik przez `ctx.mesh_result(verts, faces, info)` (statystyki: area, ml, closed, bounds dopisuje
+  sam); bibliotekę przez `ctx.library_mesh(mid)`. `info.ref` = tło do wyświetlenia; zmiana samego
+  `info` (np. tło) nie kopiuje plików — `info` żyje w manifeście cache.
+- Orientacja: normalne na zewnątrz, objętość > 0 — po każdej operacji, która może odwrócić
+  kolejność (marching cubes w [k,j,i], lewoskrętna macierz kierunków), `ops.orient_outwards`.
+- Marching cubes warstwami (`ops._SLAB`) + spawanie płaszczyzn styku — nigdy cały bbox naraz.
+- Do frontu idą pliki bez konwersji (`/meshes/{ref}/data`); > `DISPLAY_FACES` → kopia LOD w
+  `<mesh>/lod` (raz). vtk.js tylko w `VolumeRenderer3D.setMeshes`; kontur 2D w `viewport/meshcut.ts`
+  (afiniczne głębokość/ekran z `ViewProj`, głębokości wierzchołków cache'owane per orientacja).
+- Plik: `meshes/io.py` (STL/OBJ/PLY), nagłówek `SPACE=LPS|RAS` przy zapisie i odczycie.
+
+## Filtry (KONWENCJE)
+
+- Filtr lokalny → `filtry.slabbed(ctx, arr, g, margin_k, fn, dtype, label)`: warstwy wzdłuż k z
+  marginesem ≥ zasięg filtra (Gauss 4σ, Hessian 3σ, morfologia r × przejścia); test zgodności z
+  całym wolumenem w `test_slabs_equal_whole_volume`. Duże bufory per woksel → `share < 1`.
+- Filtr globalny (normalizacja po całym obrazie, np. dyfuzja anizotropowa, N4, odległość) — na
+  całym wolumenie przez `run_filter(ctx, filt, ...)` (postęp ITK + `Abort()` przy anulowaniu).
+- Wygładzanie zachowuje dtype wejścia (`_cast_like`); mapa cech = float32 + `_info(v, s, arr)`
+  (własne okno z percentyli, `modality=""`).
+- `sitk.GetArrayViewFromImage(x)` — `x` MUSI być w zmiennej do końca użycia widoku (widok nie
+  trzyma obrazu; tymczasowy = śmieci w wyniku). Lekcja z E9.
 
 ## Pomiary (KONWENCJE)
 
@@ -111,6 +143,29 @@ app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
   wszystkich widoków), zapis do node'a dopiero na końcu gestu.
 - Warstwy nad widokiem 2D dostają `ViewProj` (świat↔ekran, głębokość względem przekroju) — nie
   sięgają do wnętrza `SliceView`.
+
+## Tablica / Notatki / Dokumentacja (KONWENCJE)
+
+- Globalne (folder danych: `notes/`, `boards/`, `app_docs.json`), nie per workspace — jak w praSzczur.
+- Wszystko, co trafia na tablicę spoza zakładki, idzie przez `addImageToBoard` (otwarta tablica
+  dostaje obiekt na żywo przez `registerLiveBoard`, inaczej zapis w sidecarze) — nigdy nie
+  nadpisywać `board.json` obok otwartego płótna.
+- Kopiowanie wartości do notatki: `copyValue(text, event)` z `core/notePad.svelte.ts`.
+- Opis node'a czytać przez `nodeDoc(typeId, fallback)` (nadpisania z Dokumentacji).
+- Zakładka jest dzieckiem `.pane` (flex w wierszu) — jej korzeń musi mieć `flex: 1; min-width: 0`,
+  inaczej ma szerokość treści (lekcja z E6: płótno Tablicy miało 0 px).
+- Skróty klawiszowe zakładki działają tylko, gdy jest widoczna (`root.offsetParent`) — zakładki
+  zostają zamontowane w tle. Nowy skrót → dopisać do `ui/ShortcutsModal.svelte`.
+- Test w przeglądarce, gdy port 7433 jest zajęty: sidecar z `PRATRD_PORT=7533`, Vite z
+  `VITE_PRATRD_PORT=7533`.
+
+## Pamięć przy dużych wolumenach (lekcja z E7)
+
+- Nigdy `np.bincount` / porównania na całym wolumenie naraz bez potrzeby: `bincount` kopiuje
+  wejście do `intp` (8 B/woksel). Zliczać kawałkami (≤ 16 M wokseli) albo `count_nonzero`.
+- Maski budować warstwami (`_slabs`) prosto do tablicy wynikowej; bool → uint8 przez `.view`.
+- Obrazy etykiet SimpleITK (uint32) tylko oglądać `GetArrayViewFromImage` i zwalniać od razu.
+- Zmiana w węźle ciężkim → `uv run python scripts/bench_large.py dicom` przed i po.
 
 ## Skrypty edytujące pliki (lekcja z E4)
 

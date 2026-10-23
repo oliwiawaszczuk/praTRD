@@ -1,20 +1,23 @@
 <script lang="ts">
   import { getSetting, setSetting } from "#lib/core/appSettings.svelte.ts";
 
+  // Multiplication, not `<<`: JS shifts are 32-bit (20 << 30 === 0, 50 << 30 < 0).
+  const MB = 2 ** 20;
+  const GB = 2 ** 30;
   const GPU = [
-    { v: 32 << 20, label: "32 M", mem: "64 MB" },
-    { v: 128 << 20, label: "128 M", mem: "256 MB" },
-    { v: 256 << 20, label: "256 M", mem: "512 MB" },
-    { v: 512 << 20, label: "512 M", mem: "1 GB" },
+    { v: 32 * MB, label: "32 M", mem: "64 MB" },
+    { v: 128 * MB, label: "128 M", mem: "256 MB" },
+    { v: 256 * MB, label: "256 M", mem: "512 MB" },
+    { v: 512 * MB, label: "512 M", mem: "1 GB" },
   ];
   const CACHE = [
-    { v: 5 << 30, label: "5 GB" },
-    { v: 20 << 30, label: "20 GB" },
-    { v: 50 << 30, label: "50 GB" },
-    { v: 200 << 30, label: "200 GB" },
+    { v: 5 * GB, label: "5 GB" },
+    { v: 20 * GB, label: "20 GB" },
+    { v: 50 * GB, label: "50 GB" },
+    { v: 200 * GB, label: "200 GB" },
   ];
-  const gpu = $derived(getSetting("gpu3dVoxels", 256 << 20));
-  const cache = $derived(getSetting("cacheBytes", 20 << 30));
+  const gpu = $derived(getSetting("gpu3dVoxels", 256 * MB));
+  const cache = $derived(getSetting("cacheBytes", 20 * GB));
 </script>
 
 <div class="row" title="Ile wokseli może trafić do GPU w widoku 3D — więcej = pełniejsza rozdzielczość 3D">

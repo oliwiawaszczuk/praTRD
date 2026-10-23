@@ -32,6 +32,7 @@ _DEPS = (
     "scipy",
     "nibabel",
     "highdicom",
+    "fast_simplification",
 )
 
 
@@ -99,3 +100,18 @@ def export_csv(body: CsvExport) -> dict:
         raise HTTPException(400, "Folder nie istnieje")
     p.write_text(body.text, encoding="utf-8-sig", newline="")
     return {"path": str(p), "bytes": p.stat().st_size}
+
+
+@router.post("/export/png")
+async def export_png(request: Request, path: str) -> dict:
+    """A PNG (board export, screenshot) written where the user chose in the Save dialog."""
+    p = Path(path)
+    if not p.is_absolute() or p.suffix.lower() != ".png":
+        raise HTTPException(400, "Oczekiwano bezwzględnej ścieżki do pliku .png")
+    if not p.parent.is_dir():
+        raise HTTPException(400, "Folder nie istnieje")
+    data = await request.body()
+    if not data.startswith(b"\x89PNG"):
+        raise HTTPException(400, "To nie jest plik PNG")
+    p.write_bytes(data)
+    return {"path": str(p), "bytes": len(data)}

@@ -17,7 +17,7 @@ root = Path(SPECPATH).parents[1]
 datas, binaries, hiddenimports = [], [], []
 for pkg in (
     "pratrd", "pydicom", "pylibjpeg", "libjpeg", "openjpeg", "SimpleITK",
-    "zarr", "numcodecs", "highdicom", "nibabel", "PIL", "websockets",
+    "zarr", "numcodecs", "highdicom", "nibabel", "PIL", "websockets", "fast_simplification",
 ):
     d, b, h = collect_all(pkg)
     datas += d

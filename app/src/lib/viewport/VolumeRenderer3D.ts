@@ -1,7 +1,11 @@
-// 3-D volume rendering (GPU ray casting) through vtk.js, behind a small interface so the
-// rest of the app never touches vtk.js objects (see docs/02-plan.md §2).
+// 3-D volume rendering (GPU ray casting) and surfaces through vtk.js, behind a small
+// interface so the rest of the app never touches vtk.js objects (see docs/02-plan.md §2).
 
 import "@kitware/vtk.js/Rendering/Profiles/Volume";
+import "@kitware/vtk.js/Rendering/Profiles/Geometry";
+import vtkActor from "@kitware/vtk.js/Rendering/Core/Actor";
+import vtkMapper from "@kitware/vtk.js/Rendering/Core/Mapper";
+import vtkPolyData from "@kitware/vtk.js/Common/DataModel/PolyData";
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 import vtkPiecewiseFunction from "@kitware/vtk.js/Common/DataModel/PiecewiseFunction";
@@ -14,8 +18,10 @@ import Constants from "@kitware/vtk.js/Rendering/Core/VolumeMapper/Constants";
 
 import type { LevelGeometry } from "#lib/core/library.svelte.ts";
 import { worldToIjk, type Vec3 } from "./geometry.ts";
+import { cutInGrid, type Cut } from "./cuts.ts";
 import type { TransferFunction } from "./presets.ts";
 import type { Voxels } from "./slices.ts";
+import type { MeshData } from "#lib/core/meshes.svelte.ts";
 
 const { BlendMode } = Constants;
 
@@ -83,6 +89,8 @@ export class VolumeRenderer3D {
   // CPU copies for picking and live brush edits (the arrays handed to vtk.js, not copies)
   private bg: { data: Voxels; g: LevelGeometry } | null = null;
   private ov: { data: Uint8Array; g: LevelGeometry; scalars: ReturnType<typeof vtkDataArray.newInstance> } | null = null;
+  // surfaces (mesh nodes): one actor per mesh ref, buffers handed to vtk.js as they came
+  private meshes = new Map<string, { actor: ReturnType<typeof vtkActor.newInstance>; data: MeshData }>();
   private lastTf: TransferFunction | null = null;
   private ghost = 1;
   private container: HTMLElement;
@@ -345,7 +353,105 @@ export class VolumeRenderer3D {
     this.setGhost(0.18);
   }
 
+  /**
+   * Surfaces to show (replaces the previous set; unchanged refs keep their GPU buffers).
+   * Opaque by default; with opacity < 1 the background ghost shows through.
+   */
+  setMeshes(list: { data: MeshData; color: string }[], opacity: number): void {
+    const ren = this.grw.getRenderer();
+    const want = new Set(list.map((m) => m.data.ref));
+    for (const [ref, m] of this.meshes) {
+      if (want.has(ref)) continue;
+      ren.removeActor(m.actor);
+      m.actor.getMapper()?.delete();
+      m.actor.delete();
+      this.meshes.delete(ref);
+    }
+    for (const { data, color } of list) {
+      let m = this.meshes.get(data.ref);
+      if (!m) {
+        const pd = vtkPolyData.newInstance();
+        pd.getPoints().setData(data.verts, 3);
+        pd.getPolys().setData(data.cells);
+        pd.getPointData().setNormals(vtkDataArray.newInstance({ name: "Normals", numberOfComponents: 3, values: data.normals }));
+        const mapper = vtkMapper.newInstance({ scalarVisibility: false });
+        mapper.setInputData(pd);
+        const actor = vtkActor.newInstance();
+        actor.setMapper(mapper);
+        const prop = actor.getProperty();
+        prop.setInterpolationToPhong();
+        prop.setAmbient(0.15);
+        prop.setDiffuse(0.8);
+        prop.setSpecular(0.3);
+        prop.setSpecularPower(20);
+        ren.addActor(actor);
+        m = { actor, data };
+        this.meshes.set(data.ref, m);
+      }
+      const prop = m.actor.getProperty();
+      prop.setColor(...hex(color));
+      prop.setOpacity(opacity);
+    }
+    this.setGhost(this.ovAdded || this.meshes.size ? 0.18 : 1);
+    ren.resetCameraClippingRange();
+    if (!this.hasData && this.meshes.size) {
+      this.hasData = true; // a mesh without any volume still renders
+      this.resetCamera();
+    }
+    this.requestRender();
+  }
+
+  /** Nearest ray–triangle hit (Möller–Trumbore) over all shown meshes, as ray parameter. */
+  private hitMeshes(o: Vec3, dir: Vec3, tMin: number): number {
+    let best = Infinity;
+    for (const { data } of this.meshes.values()) {
+      const b = data.bounds;
+      // slab test on the mesh box first: most rays miss most meshes
+      let t0 = tMin;
+      let t1 = Infinity;
+      for (let n = 0; n < 3; n++) {
+        if (Math.abs(dir[n]) < 1e-12) {
+          if (o[n] < b[2 * n] || o[n] > b[2 * n + 1]) t1 = -Infinity;
+          continue;
+        }
+        let ta = (b[2 * n] - o[n]) / dir[n];
+        let tb = (b[2 * n + 1] - o[n]) / dir[n];
+        if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta);
+        t1 = Math.min(t1, tb);
+      }
+      if (t0 > t1 || t0 > best) continue;
+      const v = data.verts;
+      const c = data.cells;
+      for (let f = 0; f < data.nFaces; f++) {
+        const ia = c[4 * f + 1] * 3;
+        const ib = c[4 * f + 2] * 3;
+        const ic = c[4 * f + 3] * 3;
+        const e1x = v[ib] - v[ia], e1y = v[ib + 1] - v[ia + 1], e1z = v[ib + 2] - v[ia + 2];
+        const e2x = v[ic] - v[ia], e2y = v[ic + 1] - v[ia + 1], e2z = v[ic + 2] - v[ia + 2];
+        const px = dir[1] * e2z - dir[2] * e2y;
+        const py = dir[2] * e2x - dir[0] * e2z;
+        const pz = dir[0] * e2y - dir[1] * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (det > -1e-12 && det < 1e-12) continue;
+        const inv = 1 / det;
+        const sx = o[0] - v[ia], sy = o[1] - v[ia + 1], sz = o[2] - v[ia + 2];
+        const u = (sx * px + sy * py + sz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = sy * e1z - sz * e1y;
+        const qy = sz * e1x - sx * e1z;
+        const qz = sx * e1y - sy * e1x;
+        const w = (dir[0] * qx + dir[1] * qy + dir[2] * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (t >= tMin && t < best) best = t;
+      }
+    }
+    return best;
+  }
+
   private setGhost(f: number): void {
+    if (f === 1 && this.meshes.size) f = 0.18; // a mesh is still shown: keep the ghost
     if (this.ghost === f) return this.requestRender();
     this.ghost = f;
     if (this.lastTf) this.setTransferFunction(this.lastTf);
@@ -359,7 +465,6 @@ export class VolumeRenderer3D {
    */
   pick(x: number, y: number, what: { mask: boolean; tissue: boolean }): Vec3 | null {
     const box = this.bg?.g ?? this.ov?.g;
-    if (!box) return null;
     const W = this.container.clientWidth;
     const H = this.container.clientHeight;
     const ren = this.grw.getRenderer();
@@ -373,6 +478,16 @@ export class VolumeRenderer3D {
     const len = Math.hypot(...dir) || 1;
     dir = [dir[0] / len, dir[1] / len, dir[2] / len];
     const o: Vec3 = [a[0], a[1], a[2]];
+    const cam = this.grw.getRenderer().getActiveCamera();
+    // nearest visible surface (mesh) along the ray — markups and the brush land on it
+    let tEye = -Infinity;
+    if (!cam.getParallelProjection()) {
+      const p = cam.getPosition();
+      tEye = (p[0] - o[0]) * dir[0] + (p[1] - o[1]) * dir[1] + (p[2] - o[2]) * dir[2];
+    }
+    const tMesh = what.tissue && this.meshes.size ? this.hitMeshes(o, dir, tEye) : Infinity;
+    const at = (t: number): Vec3 => [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+    if (!box) return Number.isFinite(tMesh) ? at(tMesh) : null;
     // entry / exit of the ray through the volume box (slab test in index space)
     const oi = worldToIjk(box, o);
     const di = linearIjk(box, dir);
@@ -382,7 +497,7 @@ export class VolumeRenderer3D {
       const lo = -0.5;
       const hi = box.size[n] - 0.5;
       if (Math.abs(di[n]) < 1e-12) {
-        if (oi[n] < lo || oi[n] > hi) return null;
+        if (oi[n] < lo || oi[n] > hi) t0 = Infinity;
         continue;
       }
       let ta = (lo - oi[n]) / di[n];
@@ -391,13 +506,10 @@ export class VolumeRenderer3D {
       t0 = Math.max(t0, ta);
       t1 = Math.min(t1, tb);
     }
-    if (t0 > t1) return null;
-    const cam = this.grw.getRenderer().getActiveCamera();
-    if (!cam.getParallelProjection()) {
-      // never pick behind the eye when zoomed inside the volume
-      const p = cam.getPosition();
-      t0 = Math.max(t0, (p[0] - o[0]) * dir[0] + (p[1] - o[1]) * dir[1] + (p[2] - o[2]) * dir[2]);
-    }
+    // never pick behind the eye when zoomed inside the volume; nothing behind a mesh either
+    t0 = Math.max(t0, tEye);
+    t1 = Math.min(t1, tMesh);
+    if (t0 > t1) return Number.isFinite(tMesh) ? at(tMesh) : null;
     const ov = what.mask ? this.ov : null;
     const bg = what.tissue && this.bg && this.lastTf ? this.bg : null;
     const opacity = bg ? opacityLookup(this.lastTf!.opacity) : null;
@@ -411,11 +523,11 @@ export class VolumeRenderer3D {
     };
     const step = 0.5 * Math.min(...(ov?.g ?? box).spacing, ...box.spacing);
     for (let t = t0; t <= t1; t += step) {
-      if (ov && sample(ov.g, ov.data, t) > 0) return [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
-      if (bg && opacity!(sample(bg.g, bg.data, t)) > 0.08)
-        return [o[0] + dir[0] * t, o[1] + dir[1] * t, o[2] + dir[2] * t];
+      if (ov && sample(ov.g, ov.data, t) > 0) return at(t);
+      // the ghosted background (while a mesh is shown) is not a surface to land on
+      if (bg && !this.meshes.size && opacity!(sample(bg.g, bg.data, t)) > 0.08) return at(t);
     }
-    return null;
+    return Number.isFinite(tMesh) ? at(tMesh) : null;
   }
 
   /**
@@ -458,11 +570,87 @@ export class VolumeRenderer3D {
     this.requestRender();
   }
 
+  /**
+   * Scissors frame of the current camera for a shape drawn in CSS px: M maps world to
+   * (x, y, ·, w) so that x/w, y/w are the shape's coordinates — tangent of the view angle for
+   * perspective (the cut is a cone from the eye), mm for orthographic (a prism).
+   */
+  cutFrame(pts: [number, number][]): { M: number[]; poly: [number, number][] } {
+    const cam = this.grw.getRenderer().getActiveCamera();
+    const pos = cam.getPosition();
+    const fp = cam.getFocalPoint();
+    const vu = cam.getViewUp();
+    const unit = (a: number[]): Vec3 => {
+      const l = Math.hypot(a[0], a[1], a[2]) || 1;
+      return [a[0] / l, a[1] / l, a[2] / l];
+    };
+    const cross = (a: Vec3, b: number[]): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const dop = unit([fp[0] - pos[0], fp[1] - pos[1], fp[2] - pos[2]]);
+    const right = unit(cross(dop, vu));
+    const up = cross(right, dop);
+    const row = (e: Vec3) => [e[0], e[1], e[2], -(e[0] * pos[0] + e[1] * pos[1] + e[2] * pos[2])];
+    const W = this.container.clientWidth;
+    const H = Math.max(1, this.container.clientHeight);
+    const aspect = W / H;
+    const ortho = cam.getParallelProjection();
+    const s = ortho ? cam.getParallelScale() : Math.tan(((cam.getViewAngle() / 2) * Math.PI) / 180);
+    const M = ortho ? [...row(right), ...row(up), ...row(dop), 0, 0, 0, 1] : [...row(right), ...row(up), 0, 0, 0, 1, ...row(dop)];
+    return { M, poly: pts.map(([x, y]) => [((2 * x) / W - 1) * s * aspect, (1 - (2 * y) / H) * s]) };
+  }
+
+  /** A scissors cut applied to the overlay in place (instant 3-D feedback, ~0.1–0.3 s). */
+  applyCut(cut: Cut, color: string): void {
+    if (!this.ov) {
+      if (cut.mode !== "add" || !this.bg) return;
+      const g = this.bg.g;
+      this.setOverlay(new Uint8Array(g.size[0] * g.size[1] * g.size[2]), g, { 1: color });
+      if (!this.ov) return;
+    }
+    const { data, g, scalars } = this.ov;
+    const { A, b, inside } = cutInGrid(cut, g);
+    const [ni, nj, nk] = g.size;
+    const keep = cut.mode === "keep";
+    const v = cut.mode === "add" ? 1 : 0;
+    const a0 = A[0][0], a1 = A[1][0], a2 = A[2][0], a3 = A[3][0];
+    for (let k = 0; k < nk; k++) {
+      for (let j = 0; j < nj; j++) {
+        let x = A[0][2] * k + A[0][1] * j + b[0];
+        let y = A[1][2] * k + A[1][1] * j + b[1];
+        let z = A[2][2] * k + A[2][1] * j + b[2];
+        let w = A[3][2] * k + A[3][1] * j + b[3];
+        const row = (k * nj + j) * ni;
+        for (let i = 0; i < ni; i++) {
+          const hit = inside(x, y, z, w);
+          if (keep ? !hit : hit) data[row + i] = keep ? 0 : v;
+          x += a0;
+          y += a1;
+          z += a2;
+          w += a3;
+        }
+      }
+    }
+    scalars.modified();
+    this.requestRender();
+  }
+
+  /** The current frame at full quality as an image (screenshots). */
+  async capture(): Promise<HTMLImageElement> {
+    const [shot] = this.grw.getRenderWindow().captureImages("image/png");
+    const url = await shot;
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("capture"));
+      img.src = url;
+    });
+    return img;
+  }
+
   /** Anterior view, head up (LPS: camera on −y looking towards +y, view-up +z). */
   resetCamera(): void {
     const ren = this.grw.getRenderer();
     const cam = ren.getActiveCamera();
-    const b = this.actor.getBounds();
+    const b = this.bg ? this.actor.getBounds() : ren.computeVisiblePropBounds();
     const c = [(b[0] + b[1]) / 2, (b[2] + b[3]) / 2, (b[4] + b[5]) / 2];
     cam.setFocalPoint(c[0], c[1], c[2]);
     cam.setPosition(c[0], c[1] - 1000, c[2]);

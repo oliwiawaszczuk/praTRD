@@ -8,19 +8,26 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-PortKind = Literal["wolumen", "segmentacja", "segment", "punkty", "tabela", "liczba"]
-Domain = Literal["wolumen", "segmentacja", "pomiary"]
+PortKind = Literal["wolumen", "segmentacja", "segment", "punkty", "tabela", "liczba", "mesh"]
+Domain = Literal["wolumen", "filtry", "segmentacja", "pomiary", "mesh"]
 Stage = Literal["dane", "przetwarzanie", "wynik"]
 # "points": [[x,y,z] mm, …] (e.g. seeds clicked in a view);
-# "strokes": [{"p": [[x,y,z], …], "r": mm, "mode": "add"|"erase"}, …] (brush edits)
+# "strokes": brush spheres {"p": [[x,y,z], …], "r": mm, "mode": "add"|"erase"} and scissors
+#   cuts {"kind": "cut", "mode": "add"|"erase"|"keep", "M": 4×4 world→(x,y,z,w) row-major,
+#   "poly": [[x,y], …] in x/w, y/w, "z": [lo, hi] of z/w or null (unlimited depth)}
 # "markups": [{"id", "type": point|line|angle|roi, "name", "p": [[x,y,z] mm, …]}, …]
-ParamType = Literal["number", "int", "select", "bool", "volume", "points", "strokes", "markups"]
+# "mesh": id of a mesh in the workspace library (12 hex)
+ParamType = Literal[
+    "number", "int", "select", "bool", "volume", "mesh", "points", "strokes", "markups"
+]
 Cost = Literal["light", "heavy"]
 
 DOMAIN_LABELS: dict[str, str] = {
     "wolumen": "Wolumen",
+    "filtry": "Filtry (SimpleITK)",
     "segmentacja": "Segmentacja",
     "pomiary": "Pomiary i statystyki",
+    "mesh": "Mesh",
 }
 
 
@@ -94,19 +101,7 @@ class NodeType:
                 elif p.type == "points":
                     v = [[round(float(c), 3) for c in pt[:3]] for pt in (v or []) if len(pt) >= 3]
                 elif p.type == "strokes":
-                    v = [
-                        {
-                            "p": [
-                                [round(float(c), 3) for c in pt[:3]]
-                                for pt in st.get("p", [])
-                                if len(pt) >= 3
-                            ],
-                            "r": max(0.1, float(st.get("r", 2.0))),
-                            "mode": "erase" if st.get("mode") == "erase" else "add",
-                        }
-                        for st in (v or [])
-                        if isinstance(st, dict)
-                    ]
+                    v = [c for c in (_clean_stroke(st) for st in (v or [])) if c]
                 elif p.type == "markups":
                     v = [m for m in (_clean_markup(m) for m in (v or [])) if m]
                 else:
@@ -153,4 +148,28 @@ def _clean_markup(m: Any) -> dict[str, Any] | None:
         "type": m["type"],
         "name": str(m.get("name", ""))[:60],
         "p": pts,
+    }
+
+
+def _clean_stroke(st: Any) -> dict[str, Any] | None:
+    if not isinstance(st, dict):
+        return None
+    if st.get("kind") == "cut":
+        m = [float(x) for x in st.get("M", [])]
+        poly = [[round(float(c), 4) for c in pt[:2]] for pt in st.get("poly", []) if len(pt) >= 2]
+        if len(m) != 16 or len(poly) < 3:
+            return None
+        z = st.get("z")
+        mode = st.get("mode")
+        return {
+            "kind": "cut",
+            "mode": mode if mode in ("add", "erase", "keep") else "erase",
+            "M": [round(x, 6) for x in m],
+            "poly": poly,
+            "z": [float(z[0]), float(z[1])] if isinstance(z, list) and len(z) == 2 else None,
+        }
+    return {
+        "p": [[round(float(c), 3) for c in pt[:3]] for pt in st.get("p", []) if len(pt) >= 3],
+        "r": max(0.1, float(st.get("r", 2.0))),
+        "mode": "erase" if st.get("mode") == "erase" else "add",
     }

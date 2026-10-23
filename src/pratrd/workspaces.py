@@ -5,7 +5,7 @@ workspaces/
   <wid>/
     workspace.json         WorkspaceMeta + format version (lets import validate a folder)
     settings.json          free-form UI state written by the front (wsGet/wsSet)
-    series/ store/ nodegraphs/   filled by later stages
+    series/ store/ meshes/ nodegraphs/   filled by later stages
     cache/                 regenerable node results — never exported
 
 FastAPI runs sync endpoints in a thread pool, so every registry read-modify-write is
@@ -25,7 +25,7 @@ from .jsonio import read_json, write_json
 FORMAT_VERSION = 1
 DEFAULT_NAME = "Nowy workspace"
 EXPORT_PREFIX = "praTRD_workspace_"
-SUBDIRS = ("series", "store", "cache", "nodegraphs")
+SUBDIRS = ("series", "store", "meshes", "cache", "nodegraphs")
 NON_EXPORTED = ("cache",)
 
 _ID_RE = re.compile(r"^[0-9a-f]{12}$")

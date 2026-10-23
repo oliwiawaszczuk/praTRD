@@ -26,7 +26,7 @@ export function outputPos(n: GNode, t: NodeTypeSchema, socket: string): [number,
 
 /** Approximate height (marquee / fit-to-view only — the card itself may differ slightly). */
 export function nodeHeight(t: NodeTypeSchema): number {
-  const thumb = t.outputs.some((o) => o.kind === "wolumen" || o.kind === "segment" || o.kind === "segmentacja") ? THUMB_H : 0;
+  const thumb = t.outputs.some((o) => ["wolumen", "segment", "segmentacja", "mesh"].includes(o.kind)) ? THUMB_H : 0;
   const params = t.widget === "cropbox" ? 96 : t.widget ? 80 + t.params.length * 12 : t.params.length * PARAM_H;
   const chart = t.outputs.some((o) => o.kind === "tabela") && t.widget !== "markups" ? 78 : 0;
   return HEADER_H + portRows(t) * ROW_H + params + thumb + chart + 12;

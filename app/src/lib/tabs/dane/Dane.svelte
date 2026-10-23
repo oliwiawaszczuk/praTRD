@@ -36,7 +36,7 @@
       <div class="empty">
         <Icon name="cube" size={34} />
         <span>Biblioteka jest pusta</span>
-        <small>Wybierz folder z seriami DICOM albo pliki NIfTI / NRRD / MHA — możesz też upuścić je na okno.</small>
+        <small>Wybierz folder z seriami DICOM albo pliki NIfTI / NRRD / MHA (mesh: STL / OBJ / PLY) — możesz też upuścić je na okno.</small>
       </div>
     {:else}
       <ul>

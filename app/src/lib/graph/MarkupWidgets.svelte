@@ -3,6 +3,7 @@
   // views, and the list of placed markups with their live measurement. Hover → highlighted in
   // the views, click → all views jump to it, double click → rename, × → delete.
   import { promptText } from "#lib/ui/dialogs.svelte.ts";
+  import { copyValue } from "#lib/core/notePad.svelte.ts";
   import { setCursor } from "#lib/viewport/scene.svelte.ts";
   import { centroid, measureText, type Markup, type MarkupType } from "#lib/viewport/markups.ts";
   import { segTools, setFocusMarkup, setTool } from "./segTools.svelte.ts";
@@ -55,9 +56,9 @@
         <li
           onpointerenter={() => setFocusMarkup(m.id)}
           onpointerleave={() => setFocusMarkup(null)}
-          onclick={() => setCursor(centroid(m))}
+          onclick={(e) => (e.metaKey || e.ctrlKey ? copyValue(`${m.name}: ${measureText(m)}`, e) : setCursor(centroid(m)))}
           ondblclick={() => rename(m)}
-          title="Kliknij: pokaż w widokach · dwuklik: zmień nazwę"
+          title="Klik: pokaż w widokach · ⌘/Ctrl+klik: do przypiętej notatki · dwuklik: zmień nazwę"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
             <path d={TOOLS.find((b) => b.t === m.type)?.d} />

@@ -23,9 +23,13 @@
   import { SliceLoader, type Slice, type SliceRequest } from "./slices.ts";
   import { SliceRenderer } from "./SliceRenderer.ts";
   import ProgressRing from "#lib/ui/ProgressRing.svelte";
-  import { hexRgb, NO_LAYERS, type SliceLayers, type Stroke } from "./layers.ts";
+  import { hexRgb, NO_LAYERS, type BrushStroke, type SliceLayers, type Stroke } from "./layers.ts";
+  import { planeMatrix, polyArea, shapePolygon } from "./cuts.ts";
   import { rasterizeStrokes } from "./strokes.ts";
   import MarkupLayer2D from "./MarkupLayer2D.svelte";
+  import MeshLayer2D from "./MeshLayer2D.svelte";
+  import Icon from "#lib/ui/Icon.svelte";
+  import { drawSvgs, sendToBoard } from "./snapshot.ts";
   import type { ViewProj } from "./layers.ts";
 
   let {
@@ -356,9 +360,25 @@
   }
 
   function drawTools(ctx: CanvasRenderingContext2D): void {
+    // the scissors shape being drawn
+    if (cutting && cutting.length > 1) {
+      const poly = shapePolygon(layers.cut.shape, cutting);
+      ctx.beginPath();
+      poly.forEach(([x, y], n) => (n ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.closePath();
+      ctx.fillStyle = layers.cut.op === "add" ? layers.color : "#e05a5a";
+      ctx.globalAlpha = 0.2;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     // no overlay to edit yet (empty start): added strokes as plain disks
     for (const st of editApplied ? [] : liveStrokes()) {
-      if (st.mode === "erase") continue;
+      if (st.kind === "cut" || st.mode === "erase") continue;
       ctx.fillStyle = layers.color;
       ctx.globalAlpha = 0.55;
       for (const p of st.p) {
@@ -488,12 +508,12 @@
     }
   }
 
-  type Drag = { mode: "cursor" | "wl" | "pan" | "paint"; x: number; y: number; c: number; w: number; cu: number; cv: number };
+  type Drag = { mode: "cursor" | "wl" | "pan" | "paint" | "cut"; x: number; y: number; c: number; w: number; cu: number; cv: number };
 
   // painting: the stroke in progress + committed strokes the shown result doesn't contain
   // yet (layers.pending) are drawn instantly — into the overlay itself when there is one
   let strokeTick = $state(0);
-  let painting: Stroke | null = null;
+  let painting: BrushStroke | null = null;
   const liveStrokes = (): Stroke[] => (painting ? [...layers.pending, painting] : layers.pending);
   let editBuf = new Uint8Array(0);
   let editApplied = false; // strokes went into the overlay this frame (no canvas disks)
@@ -507,6 +527,45 @@
   }
   let drag = $state<Drag | null>(null);
 
+  // ── scissors: the shape is drawn in screen px, stored in mm on the slice plane ──
+  let cutting: [number, number][] | null = null;
+  function cutMove(x: number, y: number): void {
+    if (!cutting) return;
+    const last = cutting[cutting.length - 1];
+    if (layers.cut.shape !== "lasso") cutting = [cutting[0], [x, y]];
+    else if (Math.hypot(x - last[0], y - last[1]) > 2) cutting.push([x, y]);
+    strokeTick++;
+  }
+  function finishCut(): void {
+    const pts = cutting;
+    cutting = null;
+    strokeTick++;
+    if (!pts) return;
+    const poly = shapePolygon(layers.cut.shape, pts);
+    if (poly.length < 3 || polyArea(poly) < 16) return; // a click, not a shape
+    const o = worldAt(W / 2, H / 2);
+    const sub = (a: Vec3): Vec3 => [a[0] - o[0], a[1] - o[1], a[2] - o[2]];
+    const unit = (a: Vec3): Vec3 => {
+      const l = Math.hypot(a[0], a[1], a[2]) || 1;
+      return [a[0] / l, a[1] / l, a[2] / l];
+    };
+    const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const eu = unit(sub(worldAt(W / 2 + 1, H / 2)));
+    const ev = unit(sub(worldAt(W / 2, H / 2 + 1)));
+    const en: Vec3 = [eu[1] * ev[2] - eu[2] * ev[1], eu[2] * ev[0] - eu[0] * ev[2], eu[0] * ev[1] - eu[1] * ev[0]];
+    const ss = g0.spacing[basis.sliceAxis];
+    layers.onStroke?.({
+      kind: "cut",
+      mode: layers.cut.op,
+      M: planeMatrix(o, eu, ev, en),
+      poly: poly.map(([x, y]) => {
+        const w = sub(worldAt(x, y));
+        return [dot(w, eu), dot(w, ev)];
+      }),
+      z: layers.cut.depth === "slice" ? [-ss / 2, ss / 2] : null,
+    });
+  }
+
   function onDown(e: PointerEvent): void {
     const rect = host!.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -514,6 +573,13 @@
     const tool = e.button === 0 && !e.shiftKey ? layers.tool : null;
     if (tool === "seed") {
       layers.onSeed?.(worldAt(x, y));
+      return;
+    }
+    if (tool === "cut") {
+      host!.setPointerCapture(e.pointerId);
+      cutting = [[x, y]];
+      drag = { mode: "cut", x: e.clientX, y: e.clientY, c: 0, w: 0, cu, cv };
+      strokeTick++;
       return;
     }
     const mode: Drag["mode"] = tool
@@ -543,6 +609,7 @@
     const dy = e.clientY - drag.y;
     if (drag.mode === "cursor") cursorAt(x, y);
     else if (drag.mode === "paint") paintAt(x, y);
+    else if (drag.mode === "cut") cutMove(x, y);
     else if (drag.mode === "wl") {
       const k = Math.max(0.5, drag.w / 300);
       setWL({ center: drag.c - dy * k, width: Math.max(1, drag.w + dx * k * 2) });
@@ -551,9 +618,25 @@
     }
   }
   function onUp(): void {
+    if (drag?.mode === "cut") finishCut();
     if (drag?.mode === "paint" && painting && painting.p.length) layers.onStroke?.({ ...painting });
     painting = null;
     drag = null;
+  }
+
+  // ── screenshot → Tablica: the GL image is read in the same task as a fresh draw (the
+  // drawing buffer is not preserved), then the overlay canvas and the markup SVG on top ──
+  async function snapToBoard(): Promise<void> {
+    if (!glCanvas || !overlay || !shown) return;
+    draw();
+    const c = document.createElement("canvas");
+    c.width = glCanvas.width;
+    c.height = glCanvas.height;
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(glCanvas, 0, 0);
+    ctx.drawImage(overlay, 0, 0);
+    if (host) await drawSvgs(ctx, host, "svg.mk", dpr);
+    await sendToBoard(c, `${PLANE_LABEL[plane]} ${sliceIdx + 1}/${nSlices} · ${vol.name}`, W, H);
   }
 
   // ── slice slider (header strip) ─────────────────────────────────────────────
@@ -616,6 +699,7 @@
 >
   <canvas class="gl" bind:this={glCanvas} style:width="{W}px" style:height="{H}px"></canvas>
   <canvas class="ov" bind:this={overlay} style:width="{W}px" style:height="{H}px"></canvas>
+  {#if shown && layers.meshes.length}<MeshLayer2D {proj} meshes={layers.meshes} />{/if}
   {#if shown}<MarkupLayer2D {proj} {layers} />{/if}
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -635,6 +719,7 @@
       <div class="thumb" style:left="{(sliceIdx / Math.max(1, nSlices - 1)) * 100}%"></div>
     </div>
     <span class="idx">{sliceIdx + 1}<i>/{nSlices}</i></span>
+    <button class="cam" title="Zrzut widoku na Tablicę" onclick={snapToBoard}><Icon name="camera" size={13} /></button>
   </div>
   {#if drag?.mode === "wl" && scene.wl}
     <div class="wlhud">O {num(scene.wl.center, 0)} · S {num(scene.wl.width, 0)}</div>
@@ -754,6 +839,23 @@
   .track:hover .thumb,
   .track.sliding .thumb {
     transform: scale(1.3);
+  }
+  .cam {
+    display: flex;
+    padding: 2px;
+    color: var(--text-dim-3);
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--t-fast);
+  }
+  .view:hover .cam {
+    opacity: 1;
+  }
+  .cam:hover {
+    color: var(--accent);
   }
   .idx {
     font-size: var(--fs-xs);

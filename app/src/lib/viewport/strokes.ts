@@ -3,6 +3,7 @@
 
 import type { LevelGeometry } from "#lib/core/library.svelte.ts";
 import { SLICE_ROWS_COLS, worldToIjk } from "./geometry.ts";
+import { cutInGrid, type Cut } from "./cuts.ts";
 import type { Stroke } from "./layers.ts";
 
 export const EDIT_ADD = 1;
@@ -29,6 +30,10 @@ export function rasterizeStrokes(
   const ss = g.spacing[sliceAxis];
   let any = false;
   for (const st of strokes) {
+    if (st.kind === "cut") {
+      any = cutSlice(out, g, sliceAxis, index, st) || any;
+      continue;
+    }
     const v = st.mode === "erase" ? EDIT_ERASE : EDIT_ADD;
     for (const p of st.p) {
       const c = worldToIjk(g, p);
@@ -53,6 +58,42 @@ export function rasterizeStrokes(
           }
         }
       }
+    }
+  }
+  return any;
+}
+
+/** A scissors cut on one slice: texel (row, col) → q = q0 + row·qr + col·qc (additions only). */
+function cutSlice(out: Uint8Array, g: LevelGeometry, sliceAxis: 0 | 1 | 2, index: number, cut: Cut): boolean {
+  const [ra, ca] = SLICE_ROWS_COLS[sliceAxis];
+  const rows = g.size[ra];
+  const cols = g.size[ca];
+  const { A, b, inside } = cutInGrid(cut, g, Math.min(...g.spacing) / 2);
+  const col = (axis: number) => [A[0][axis], A[1][axis], A[2][axis], A[3][axis]];
+  const qr = col(ra);
+  const qc = col(ca);
+  const q0 = [0, 1, 2, 3].map((n) => A[n][sliceAxis] * index + b[n]);
+  const keep = cut.mode === "keep";
+  const v = cut.mode === "add" ? EDIT_ADD : EDIT_ERASE;
+  let any = keep;
+  for (let r = 0; r < rows; r++) {
+    let x = q0[0] + qr[0] * r;
+    let y = q0[1] + qr[1] * r;
+    let z = q0[2] + qr[2] * r;
+    let w = q0[3] + qr[3] * r;
+    const base = r * cols;
+    for (let c = 0; c < cols; c++) {
+      const hit = inside(x, y, z, w);
+      if (keep) {
+        if (!hit) out[base + c] = EDIT_ERASE;
+      } else if (hit) {
+        out[base + c] = v;
+        any = true;
+      }
+      x += qc[0];
+      y += qc[1];
+      z += qc[2];
+      w += qc[3];
     }
   }
   return any;

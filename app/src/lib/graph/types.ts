@@ -1,18 +1,19 @@
 // Graph document + node-type schema (served by the sidecar: GET /node-types).
 
-export type PortKind = "wolumen" | "segmentacja" | "segment" | "punkty" | "tabela" | "liczba";
+export type PortKind = "wolumen" | "segmentacja" | "segment" | "punkty" | "tabela" | "liczba" | "mesh";
 
 export interface PortSchema {
   id: string;
   label: string;
   kind: PortKind;
   multi: boolean;
+  optional?: boolean;
 }
 
 export interface ParamSchema {
   key: string;
   label: string;
-  type: "number" | "int" | "select" | "bool" | "volume" | "points" | "strokes" | "markups";
+  type: "number" | "int" | "select" | "bool" | "volume" | "mesh" | "points" | "strokes" | "markups";
   default: unknown;
   min: number | null;
   max: number | null;
@@ -75,6 +76,7 @@ export const PORT_COLORS: Record<PortKind, string> = {
   punkty: "#f2994a",
   tabela: "#f06292",
   liczba: "#90a4ae",
+  mesh: "#4db6ac",
 };
 
 export const PORT_LABELS: Record<PortKind, string> = {
@@ -84,4 +86,5 @@ export const PORT_LABELS: Record<PortKind, string> = {
   punkty: "Punkty",
   tabela: "Tabela",
   liczba: "Liczba",
+  mesh: "Mesh",
 };

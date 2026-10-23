@@ -2,6 +2,25 @@
 
 Status: **ZATWIERDZONY** (2026-10-22). Decyzje źródłowe: `01-qa.md`. Postęp: `CHANGELOG.md`.
 
+> Korekty po E9: filtr bilateralny odrzucony (187 s na serii 512²×621) — zamiast niego dyfuzja
+> gradientowa; morfologia szarości zostaje z dokładną kulą ITK (przybliżenie krzyż/sześcian było
+> 3,5× szybsze, ale różniło się w 20 % wokseli); CLAHE (3D w ITK bardzo wolne) — później.
+>
+> Korekty po E8: eksport mesha to przycisk na karcie (jak CSV przy tabeli), nie node; import
+> STL/OBJ/PLY przez zakładkę Dane (pliki / upuszczenie) albo przycisk w node'zie *Plik mesha*;
+> układ współrzędnych pliku z nagłówka (`SPACE=LPS/RAS`, jak Slicer), przełącznik w node'zie;
+> do widoków trafia kopia LOD (≤ 1,5 mln △), eksport zawsze z oryginału. Wiele meshy naraz w
+> widokach (np. STL + segment) — później; teraz widać wynik node'a z okiem.
+>
+> Korekty po E7: wydajność zmierzona i poprawiona (`docs/03-wydajnosc.md`); tag i publikacja
+> wydania należą do właścicielki repo (asystent nie pushuje) — workflow `release.yml` buduje
+> instalatory po wypchnięciu tagu `v0.1.0`.
+>
+> Korekty po E6: Tablica, Notatki i Dokumentacja są **globalne** (jak w praSzczur), workspace
+> pamięta tylko ostatnią tablicę; zrzut viewportu = ikona aparatu w rogu każdego widoku (2D i 3D),
+> obraz z podpisem trafia na ostatnio otwartą tablicę; okno skrótów jest jedno dla całej appki
+> (klawisz „?”); ⌘/Ctrl+klik na wartości dopisuje ją do przypiętej notatki.
+>
 > Korekty po E5: zamiast node'a `pomiary/eksport` — przycisk **CSV przy każdej tabeli** (okno
 > tabeli, zapis przez systemowe „Zapisz jako”; CSV pod polski Excel: `;`, przecinek dziesiętny);
 > wykresy w SVG zamiast Plotly (lżejsze, kilkaset punktów); markupy też w 3D (stawianie na
@@ -218,10 +237,12 @@ Każdy etap kończy się działającą aplikacją, zielonym CI i wpisem w `CHANG
 | **E3 Node Graph** ✅ | edytor (port + podział), rejestr typów z Pythona, ewaluator, cache, podgląd/pełna rozdzielczość, joby na node'ach, wiele grafów, „pokaż w viewporcie”, node'y `wolumen/*` | graf seria → wygładź → widok działa na żywo |
 | **E4 Segmentacja** ✅ | node'y z §5, narzędzia w viewporcie (pędzel, seedy), renderowanie labelmap 2D/3D | segmentacja kości progiem + wyspy + ręczna poprawka, zapis i odtworzenie po restarcie |
 | **E5 Pomiary** ✅ | markupy, statystyki, histogram, profil, eksport CSV, panel tabeli | objętość segmentu zgadza się z wartością ze Slicera (±1%) na tych samych danych |
-| **E6 Zakładki z praSzczur** | Dokumentacja (+ opisy node'ów z rejestru), Notatki + FloatingNotePad, Tablica + zrzut viewportu, ShortcutsModal | wszystkie działają per workspace / globalnie jak w praSzczur |
-| **E7 Release 0.1.0** | testy wydajności na dużych danych, poprawki, tag `v0.1.0` | release z 3 instalatorami na GitHubie |
+| **E6 Zakładki z praSzczur** ✅ | Dokumentacja (+ opisy node'ów z rejestru), Notatki + FloatingNotePad, Tablica + zrzut viewportu, ShortcutsModal | wszystkie działają per workspace / globalnie jak w praSzczur |
+| **E7 Release 0.1.0** ✅ (do tagu) | testy wydajności na dużych danych, poprawki, tag `v0.1.0` | release z 3 instalatorami na GitHubie |
+| **E9 Filtry SimpleITK** ✅ | domena Filtry: odszumianie (dyfuzja), krawędzie, naczyniowość (Frangi), wyostrz, morfologia szarości, arytmetyka, maskowanie, mapa odległości, N4; warstwy z marginesem, postęp/anulowanie | drzewo naczyń z CTA (Frangi → próg → wyspy → mesh); każdy filtr na serii 512²×621 z postępem, ≤ 3 GB |
+| **E8 Mesh** ✅ | gniazdo `mesh`, node'y: z segmentu, wygładź, decymacja, plik STL/OBJ/PLY, mesh → segment, statystyki; mesh w 3D + kontur w 2D; eksport STL/OBJ/PLY | STL tętniaka z próbki leży na CTA; mesh kości ±1% objętości segmentu; 60 fps z meshem 1,5 mln △ |
 
-Po 0.1: domena Mesh → filtry SimpleITK → AI segmentacja (opcjonalny dodatek) → rejestracja i fuzja.
+Po 0.1: ~~domena Mesh~~ (E8) → ~~filtry SimpleITK~~ (E9) → AI segmentacja (opcjonalny dodatek) → rejestracja i fuzja.
 
 ---
 

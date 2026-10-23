@@ -151,17 +151,33 @@ def check_graph(api: Api, wid: str, vid: str) -> None:
                 "params": {"items": [{"id": "l", "type": "line", "p": [[0, 0, 0], [20, 20, 5]]}]},
             },
             {"id": "p", "type": "pomiary/profil", "params": {}},
+            {
+                "id": "c",
+                "type": "segmentacja/edycja",
+                "params": {
+                    "strokes": [
+                        {
+                            "kind": "cut",
+                            "mode": "keep",
+                            "M": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+                            "poly": [[-1e4, -1e4], [1e4, -1e4], [1e4, 1e4], [-1e4, 1e4]],
+                            "z": None,
+                        }
+                    ]
+                },
+            },
         ],
         "edges": [
             *seg_graph["edges"],
             {"from": "m", "fromSocket": "out", "to": "s", "toSocket": "seg"},
             {"from": "a", "fromSocket": "out", "to": "p", "toSocket": "vol"},
             {"from": "k", "fromSocket": "out", "to": "p", "toSocket": "pts"},
+            {"from": "m", "fromSocket": "out", "to": "c", "toSocket": "in"},
         ],
     }
     r = api.json(
         f"/workspaces/{wid}/graphs/{gid}/evaluate",
-        {"graph": meas, "targets": ["s", "p"], "quality": "full"},
+        {"graph": meas, "targets": ["s", "p", "c"], "quality": "full"},
     )
     job = api.wait_job(r["jobId"])  # type: ignore[index]
     assert job["state"] == "done", job
@@ -170,7 +186,69 @@ def check_graph(api: Api, wid: str, vid: str) -> None:
     row = st["outputs"]["tab"]["value"]["rows"][0]
     assert row["voxels"] == m["outputs"]["out"]["info"]["voxels"] and row["surface"] > 0, row
     assert job["result"]["p"]["state"] == "done", job["result"]["p"]
-    print("graph: statystyki + profil OK")
+    # scissors (skimage.draw): "keep" with a polygon around everything changes nothing
+    cut = job["result"]["c"]
+    assert cut["state"] == "done", cut
+    assert cut["outputs"]["out"]["info"]["voxels"] == row["voxels"], cut
+    print("graph: statystyki + profil + nożyce OK")
+
+    # meshes: marching cubes, quadric decimation (fast_simplification), voxelisation, export
+    mesh = {
+        "nodes": [
+            *seg_graph["nodes"],
+            {"id": "ms", "type": "mesh/z_segmentu", "params": {"smooth": 0.3}},
+            {"id": "md", "type": "mesh/decymuj", "params": {"keep": 50}},
+            {"id": "mv", "type": "mesh/do_segmentu", "params": {}},
+        ],
+        "edges": [
+            *seg_graph["edges"],
+            {"from": "m", "fromSocket": "out", "to": "ms", "toSocket": "in"},
+            {"from": "ms", "fromSocket": "out", "to": "md", "toSocket": "in"},
+            {"from": "md", "fromSocket": "out", "to": "mv", "toSocket": "in"},
+            {"from": "a", "fromSocket": "out", "to": "mv", "toSocket": "vol"},
+        ],
+    }
+    r = api.json(
+        f"/workspaces/{wid}/graphs/{gid}/evaluate",
+        {"graph": mesh, "targets": ["mv"], "quality": "full"},
+    )
+    job = api.wait_job(r["jobId"])  # type: ignore[index]
+    assert job["state"] == "done", job
+    md = job["result"]["md"]
+    assert md["state"] == "done" and md["outputs"]["out"]["info"]["faces"] > 0, md
+    assert job["result"]["mv"]["state"] == "done", job["result"]["mv"]
+    out = Path(tempfile.gettempdir()) / f"pratrd-smoke-{os.getpid()}.stl"
+    api.json(f"/workspaces/{wid}/meshes/{md['outputs']['out']['ref']}/export", {"path": str(out)})
+    assert out.stat().st_size > 84, out
+    out.unlink()
+    print("graph: mesh z segmentu + decymacja + wokselizacja + eksport STL OK")
+
+    # SimpleITK filters (slabs, ITK progress observer, N4, distance map) in the frozen build
+    filt = {
+        "nodes": [
+            *seg_graph["nodes"],
+            {"id": "fv", "type": "filtry/naczyniowosc", "params": {"steps": 2}},
+            {"id": "fd", "type": "filtry/odszumianie", "params": {"iterations": 2}},
+            {"id": "fn", "type": "filtry/n4", "params": {"iterations": 5}},
+            {"id": "fm", "type": "filtry/mapa_odleglosci", "params": {}},
+        ],
+        "edges": [
+            *seg_graph["edges"],
+            {"from": "a", "fromSocket": "out", "to": "fv", "toSocket": "in"},
+            {"from": "a", "fromSocket": "out", "to": "fd", "toSocket": "in"},
+            {"from": "a", "fromSocket": "out", "to": "fn", "toSocket": "in"},
+            {"from": "m", "fromSocket": "out", "to": "fm", "toSocket": "in"},
+        ],
+    }
+    r = api.json(
+        f"/workspaces/{wid}/graphs/{gid}/evaluate",
+        {"graph": filt, "targets": ["fv", "fd", "fn", "fm"], "quality": "full"},
+    )
+    job = api.wait_job(r["jobId"])  # type: ignore[index]
+    assert job["state"] == "done", job
+    for nid in ("fv", "fd", "fn", "fm"):
+        assert job["result"][nid]["state"] == "done", job["result"][nid]
+    print("graph: naczyniowość + dyfuzja + N4 + mapa odległości OK")
 
 
 def main() -> int:

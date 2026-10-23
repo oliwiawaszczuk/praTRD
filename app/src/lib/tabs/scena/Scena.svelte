@@ -8,7 +8,7 @@
   } from "#lib/core/library.svelte.ts";
   import { wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
   import Icon from "#lib/ui/Icon.svelte";
-  import { bestRun, startEvaluation, type VolumeOut } from "#lib/graph/evaluation.svelte.ts";
+  import { bestRun, startEvaluation, VOLUME_KINDS, type MeshOut, type VolumeOut } from "#lib/graph/evaluation.svelte.ts";
   import GraphEditor from "#lib/graph/GraphEditor.svelte";
   import CropModal from "#lib/graph/CropModal.svelte";
   import TableModal from "#lib/graph/TableModal.svelte";
@@ -42,15 +42,21 @@
   const displayRun = $derived(displayNode ? bestRun(displayNode.id) : null);
   const nodeOut = $derived.by(() => {
     const r = displayRun;
-    const o = r?.outputs ? Object.values(r.outputs).find((v) => ["wolumen", "segment", "segmentacja"].includes(v.kind)) : undefined;
+    const o = r?.outputs ? Object.values(r.outputs).find((v) => VOLUME_KINDS.includes(v.kind)) : undefined;
     return (o as VolumeOut | undefined) ?? null;
+  });
+  // a mesh node: the surface in every view, over its background volume (info.ref) or, for an
+  // imported file without one, over whatever is already shown
+  const meshOut = $derived.by(() => {
+    const o = displayRun?.outputs ? Object.values(displayRun.outputs).find((v) => v.kind === "mesh") : undefined;
+    return (o as MeshOut | undefined) ?? null;
   });
   const isLabel = (o: VolumeOut | null) => !!o && (o.kind === "segment" || o.kind === "segmentacja");
   const bgOf = (o: VolumeOut) => (isLabel(o) ? (o.info.ref as string) : o.ref);
   // no result (error, missing seeds, first run): show what flows INTO the node, so its
   // tools (seeds, brush) have something to click on
   const nodeIn = $derived.by(() => {
-    if (!displayNode || nodeOut) return null;
+    if (!displayNode || nodeOut || meshOut) return null;
     for (const port of nodeType(displayNode.type)?.inputs ?? []) {
       const o = upstreamVolume(displayNode.id, port.id);
       if (o) return o;
@@ -60,6 +66,10 @@
   const target = $derived.by(() => {
     if (displayNode) {
       const key = `node:${graph.activeId}:${displayNode.id}`;
+      if (meshOut && !nodeOut) {
+        const ref = meshOut.info.ref || untrack(() => shown)?.vol.id || libVol?.id;
+        return ref ? { ref, key, out: null } : null;
+      }
       const src = nodeOut ?? nodeIn;
       if (!src) return null;
       let ref = bgOf(src);
@@ -156,6 +166,7 @@
       outline: scene.overlayOutline,
       tool: toolNode ? segTools.tool : null,
       brushR: segTools.brushR,
+      cut: segTools.cut,
       pending,
       seeds: toolNode?.type === "segmentacja/rozrost" ? ((toolNode.params.seeds as Vec3[]) ?? []) : [],
       color,
@@ -165,6 +176,8 @@
       markups,
       focusMarkup: segTools.focusMarkup,
       onMarkups,
+      meshes: meshOut ? [{ ref: meshOut.ref, color: meshOut.info.color ?? "#4db6ac", name: meshOut.info.name ?? "Mesh" }] : [],
+      meshOpacity: scene.meshOpacity,
     };
   });
 
@@ -218,8 +231,9 @@
   const nodeStatus = $derived.by<{ kind: "busy" | "error"; text: string } | null>(() => {
     if (!displayNode) return null;
     const st = displayRun?.state;
-    if ((st === "error" || st === "blocked") && !nodeOut) return { kind: "error", text: displayRun?.error ?? "Błąd" };
-    if (!nodeOut || st === "computing" || (shown && shown.key !== `node:${graph.activeId}:${displayNode.id}`))
+    const out = nodeOut ?? meshOut;
+    if ((st === "error" || st === "blocked") && !out) return { kind: "error", text: displayRun?.error ?? "Błąd" };
+    if (!out || st === "computing" || (shown && shown.key !== `node:${graph.activeId}:${displayNode.id}`))
       return { kind: "busy", text: `Liczenie: ${displayLabel}…` };
     return null;
   });
@@ -346,7 +360,7 @@
       {/if}
     </div>
   </div>
-  <ScenePanel vol={shown?.vol} displayLabel={displayNode ? displayLabel : ""} hasOverlay={!!overlay} />
+  <ScenePanel vol={shown?.vol} displayLabel={displayNode ? displayLabel : ""} hasOverlay={!!overlay} hasMesh={!!meshOut} />
   <CropModal />
   <TableModal />
   {#if maxArea}

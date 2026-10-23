@@ -42,6 +42,26 @@ class VolumeValue:
 
 
 @dataclass
+class MeshValue:
+    """A surface: handle to <ref>.mesh (world LPS vertices). `info.ref` = background volume
+    (what the viewports show behind it), `info.color`, plus the stats stored with it."""
+
+    ref: str  # library mesh (12 hex) or node result (24 hex)
+    path: Path
+    info: dict[str, Any] = field(default_factory=dict)
+    kind: str = "mesh"
+
+    def arrays(self) -> tuple[np.ndarray, np.ndarray]:
+        """(verts float32 [N,3], faces int64 [M,3]), read-only, from the mesh LRU."""
+        from ..meshes.store import MESHES
+
+        return MESHES.get(self.path)
+
+    def to_json(self) -> dict[str, Any]:
+        return {"kind": self.kind, "ref": self.ref, "info": self.info}
+
+
+@dataclass
 class DataValue:
     """A small JSON value on an edge: "punkty" (markups) or "tabela" (columns + rows)."""
 
@@ -79,6 +99,20 @@ class ArrayCache:
                     _, old = self._map.popitem(last=False)
                     self._bytes -= old.nbytes
         return a
+
+    def put(self, path: Path, level: int, arr: np.ndarray) -> None:
+        """A freshly computed level (the caller hands it over: it becomes read-only)."""
+        arr.flags.writeable = False
+        key = (str(path), level)
+        with self._lock:
+            old = self._map.pop(key, None)
+            if old is not None:
+                self._bytes -= old.nbytes
+            self._map[key] = arr
+            self._bytes += arr.nbytes
+            while self._bytes > self.max_bytes and len(self._map) > 1:
+                _, o = self._map.popitem(last=False)
+                self._bytes -= o.nbytes
 
     def forget(self, path: Path) -> None:
         p = str(path)

@@ -13,10 +13,14 @@
   import ProjectionToggle from "./ProjectionToggle.svelte";
   import SlicePlanes3D from "./SlicePlanes3D.svelte";
   import MarkupLayer3D from "./MarkupLayer3D.svelte";
+  import Icon from "#lib/ui/Icon.svelte";
+  import { drawSvgs, sendToBoard } from "./snapshot.ts";
   import { draftClick, draftHover } from "./markupDraft.svelte.ts";
   import type { MarkupType } from "./markups.ts";
-  import { NO_LAYERS, type SliceLayers, type Stroke } from "./layers.ts";
+  import { NO_LAYERS, type BrushStroke, type SliceLayers, type Stroke } from "./layers.ts";
+  import { polyArea, shapePolygon } from "./cuts.ts";
   import type { Vec3 } from "./geometry.ts";
+  import { fetchMesh } from "#lib/core/meshes.svelte.ts";
 
   let { vol, meta, layers = NO_LAYERS }: { vol: VolumeEntry; meta: VolumeMeta; layers?: SliceLayers } = $props();
   const overlay = $derived(layers.overlay);
@@ -120,13 +124,91 @@
     return () => ctl.abort();
   });
 
+  // Surfaces of the displayed mesh node: geometry fetched once per ref (shared LRU), the
+  // renderer keeps GPU buffers of refs that stay; colour / opacity changes re-upload nothing.
+  let meshLoading = $state(false);
+  let meshErr = $state("");
+  // the opacity slider is a gesture: adaptive (reduced) resolution while it moves
+  let lastOpacity = -1;
+  let gestureTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const list = layers.meshes;
+    const opacity = layers.meshOpacity;
+    const rr = r;
+    if (!rr) return;
+    if (lastOpacity >= 0 && opacity !== lastOpacity && list.length) {
+      if (!gestureTimer) rr.beginInteraction();
+      else clearTimeout(gestureTimer);
+      gestureTimer = setTimeout(() => {
+        gestureTimer = null;
+        rr.endInteraction();
+      }, 200);
+    }
+    lastOpacity = opacity;
+    if (!list.length) {
+      rr.setMeshes([], opacity);
+      meshLoading = false;
+      meshErr = "";
+      return;
+    }
+    let live = true;
+    meshErr = "";
+    // cached geometry resolves at once: the ring only for a real download
+    const ring = setTimeout(() => live && (meshLoading = true), 80);
+    Promise.all(list.map((m) => fetchMesh(m.ref).then((data) => ({ data, color: m.color }))))
+      .then((ms) => live && rr.setMeshes(ms, opacity))
+      .catch((e) => live && (meshErr = String(e?.message ?? e)))
+      .finally(() => {
+        clearTimeout(ring);
+        if (live) meshLoading = false;
+      });
+    return () => {
+      live = false;
+      clearTimeout(ring);
+    };
+  });
+
   // ── brush / eraser on the 3-D surface ──
   const brushing = $derived(layers.tool === "brush" || layers.tool === "erase");
-  let painting: Stroke | null = null;
+  let painting: BrushStroke | null = null;
   let cursor = $state<{ x: number; y: number; r: number } | null>(null);
 
   function paintStroke(rr: VolumeRenderer3D, st: Stroke): void {
-    for (const p of st.p) rr.paint(p, st.r, st.mode === "add", layers.color);
+    if (st.kind === "cut") rr.applyCut(st, layers.color);
+    else for (const p of st.p) rr.paint(p, st.r, st.mode === "add", layers.color);
+  }
+
+  // ── scissors: a shape drawn over the 3-D view cuts along the view (through everything) ──
+  let lasso = $state<[number, number][] | null>(null);
+  const lassoPoly = $derived(lasso && lasso.length > 1 ? shapePolygon(layers.cut.shape, lasso) : null);
+  function cutDown(e: PointerEvent): boolean {
+    if (layers.tool !== "cut" || !r || e.button !== 0 || e.shiftKey) return false;
+    e.stopPropagation();
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    lasso = [local(e)];
+    return true;
+  }
+  function cutMove(e: PointerEvent): boolean {
+    if (!lasso) return false;
+    e.stopPropagation();
+    const p = local(e);
+    const last = lasso[lasso.length - 1];
+    if (layers.cut.shape !== "lasso") lasso = [lasso[0], p];
+    else if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 2) lasso = [...lasso, p];
+    return true;
+  }
+  function cutUp(e: PointerEvent): boolean {
+    if (!lasso) return false;
+    e.stopPropagation();
+    const poly = shapePolygon(layers.cut.shape, lasso);
+    lasso = null;
+    if (!r || poly.length < 3 || polyArea(poly) < 16) return true;
+    const { M, poly: tp } = r.cutFrame(poly);
+    const cut: Stroke = { kind: "cut", mode: layers.cut.op, M, poly: tp, z: null };
+    r.applyCut(cut, layers.color);
+    layers.onStroke?.(cut);
+    return true;
   }
   function local(e: PointerEvent): [number, number] {
     const b = host!.getBoundingClientRect();
@@ -172,7 +254,7 @@
   // capture phase: a stroke that starts on a structure never reaches vtk.js (no orbit);
   // in empty space, with Shift or another button the view orbits as usual
   function onDownCapture(e: PointerEvent): void {
-    if (placeDown(e)) return;
+    if (placeDown(e) || cutDown(e)) return;
     if (!brushing || !r || e.button !== 0 || e.shiftKey) return;
     const [x, y] = local(e);
     const mode: Stroke["mode"] = layers.tool === "erase" ? "erase" : "add";
@@ -189,6 +271,7 @@
   let moveRaf = 0;
   let lastMove: PointerEvent | null = null;
   function onMoveCapture(e: PointerEvent): void {
+    if (cutMove(e)) return;
     if (placing && !e.buttons) {
       const hit = surfaceAt(...local(e));
       if (hit) draftHover(hit);
@@ -219,6 +302,7 @@
     });
   }
   function onUpCapture(e: PointerEvent): void {
+    if (cutUp(e)) return;
     if (!painting) return;
     e.stopPropagation();
     const st = painting;
@@ -229,6 +313,20 @@
   $effect(() => {
     if (!brushing) cursor = null;
   });
+
+  async function snapToBoard(): Promise<void> {
+    if (!r || !host) return;
+    const img = await r.capture();
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(img, 0, 0);
+    const root = host.parentElement!;
+    await drawSvgs(ctx, root, "svg.mk3", c.width / Math.max(1, host.clientWidth));
+    const what = layers.meshes.length ? ` · ${layers.meshes[0].name}` : layers.overlay ? " · segment" : "";
+    await sendToBoard(c, `3D · ${vol.name}${what}`, host.clientWidth, host.clientHeight);
+  }
 
   function applyTf(): void {
     if (r && scene.tf && scene.wl) r.setTransferFunction(buildTf(scene.tf, vol, scene.wl));
@@ -254,7 +352,7 @@
   onpointermovecapture={onMoveCapture}
   onpointerupcapture={onUpCapture}
   onpointercancelcapture={onUpCapture}
-  class:brushing={brushing || !!placing}
+  class:brushing={brushing || !!placing || layers.tool === "cut"}
 >
   <div class="host" bind:this={host}></div>
   <div class="hud tl"><b>3D</b></div>
@@ -262,6 +360,18 @@
     <div class="hud br">poziom {shownLevel.level} · {dims(shownLevel.size)}</div>
   {/if}
   {#if shownLevel}<SlicePlanes3D renderer={r} geometry={meta.levels[0]} />{/if}
+  {#if lassoPoly}
+    <svg class="brush" aria-hidden="true">
+      <polygon
+        points={lassoPoly.map((p) => p.join(",")).join(" ")}
+        fill={layers.cut.op === "add" ? layers.color : "#e05a5a"}
+        fill-opacity="0.2"
+        stroke="#fff"
+        stroke-width="1.5"
+        stroke-dasharray="5 4"
+      />
+    </svg>
+  {/if}
   {#if cursor}
     <svg class="brush" aria-hidden="true">
       <circle
@@ -276,9 +386,14 @@
     </svg>
   {/if}
   <MarkupLayer3D renderer={r} {layers} />
+  {#if shownLevel}
+    <button class="cam" title="Zrzut widoku 3D na Tablicę" ondblclick={(e) => e.stopPropagation()} onclick={snapToBoard}>
+      <Icon name="camera" size={15} />
+    </button>
+  {/if}
   <OrientationGizmo renderer={r} />
   <ProjectionToggle renderer={r} hostHovered={hovered} />
-  {#if ovLoading && progress === null}
+  {#if (ovLoading || meshLoading) && progress === null}
     <div class="load corner"><ProgressRing size={24} /></div>
   {/if}
   {#if progress !== null}
@@ -286,6 +401,9 @@
     <div class="load" class:corner={shownLevel !== null}>
       <ProgressRing value={progress} size={shownLevel !== null ? 30 : 54} />
     </div>
+  {/if}
+  {#if meshErr && !error}
+    <div class="err">{meshErr}</div>
   {/if}
   {#if error}
     <div class="err">
@@ -310,6 +428,26 @@
   }
   .brushing .host {
     cursor: crosshair;
+  }
+  .cam {
+    position: absolute;
+    top: 184px;
+    right: 40px;
+    z-index: 5;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim-1);
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .cam:hover {
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.14);
   }
   .brush {
     position: absolute;

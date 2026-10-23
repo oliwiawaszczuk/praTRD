@@ -78,7 +78,15 @@ def _radius_vox(g: Geometry, mm: float) -> list[int]:
 
 
 def _mask_out(ctx: EvalContext, mask: np.ndarray, g: Geometry, info: dict[str, Any]) -> VolumeValue:
-    return ctx.volume_result(np.ascontiguousarray(mask, dtype=np.uint8), g, info, kind=SEG)
+    # a contiguous bool mask already IS 0/1 bytes: view it as uint8 instead of copying
+    mask = np.ascontiguousarray(mask)
+    out = mask.view(np.uint8) if mask.dtype == np.bool_ else mask.astype(np.uint8, copy=False)
+    return ctx.volume_result(out, g, info, kind=SEG)
+
+
+def _slabs(n: int, step: int = 64):
+    for k in range(0, n, step):
+        yield slice(k, min(n, k + step))
 
 
 # ── Próg ───────────────────────────────────────────────────────────────────────
@@ -88,7 +96,10 @@ def _prog(ctx: EvalContext, inputs: dict, p: dict) -> dict[str, Any]:
     v = _first(inputs, "in", VOL)
     lo, hi = sorted((p["lo"], p["hi"]))
     a = v.array()
-    mask = (a >= lo) & (a <= hi)
+    # slab by slab into one byte mask: no full-size temporaries (3 × 0.5 GB on 512²×2000)
+    mask = np.empty(a.shape, np.bool_)
+    for sl in _slabs(a.shape[0]):
+        np.logical_and(a[sl] >= lo, a[sl] <= hi, out=mask[sl])
     return {"out": _mask_out(ctx, mask, v.geometry, _seg_info(f"Próg {lo:g}–{hi:g}", _ref_of(v)))}
 
 
@@ -195,7 +206,11 @@ def _rozrost(ctx: EvalContext, inputs: dict, p: dict) -> dict[str, Any]:
         raise GraphError(f"Pusty wynik: ziarno ma wartość {shown} — {why}")
     return {
         "out": _mask_out(
-            ctx, mask > 0, v.geometry, _seg_info(f"Rozrost ({len(seeds)} ziaren)", _ref_of(v))
+            # already 0/1 (replaceValue=1): no thresholded copy
+            ctx,
+            mask,
+            v.geometry,
+            _seg_info(f"Rozrost ({len(seeds)} ziaren)", _ref_of(v)),
         )
     }
 
@@ -287,6 +302,155 @@ def _paint(mask: np.ndarray, g: Geometry, center: list[float], r_mm: float, valu
     view[inside] = value
 
 
+def _poly_raster(
+    poly: np.ndarray, cell: float | None = None, max_cells: int = 1024
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """The polygon filled on a grid of its own plane: per-voxel tests become one array lookup
+    instead of a point-in-polygon each. `cell` = wanted grid step (½ voxel for a 2-D cut in
+    mm); the grid never exceeds max_cells per side (filling 2048² costs ~0.25 s)."""
+    from skimage.draw import polygon2mask
+
+    lo = poly.min(axis=0)
+    span = float(max((poly.max(axis=0) - lo).max(), 1e-9))
+    res = max(cell or 0.0, span / (max_cells - 1))
+    n = (np.ceil((poly.max(axis=0) - lo) / res) + 1).astype(int)
+    grid = polygon2mask((int(n[1]), int(n[0])), ((poly - lo) / res)[:, ::-1])
+    return grid, lo, res
+
+
+def _cut_extruded(
+    mask: np.ndarray,
+    g: Geometry,
+    A: np.ndarray,
+    b: np.ndarray,
+    grid: np.ndarray,
+    lo: np.ndarray,
+    res: float,
+    z: list[float] | None,
+    mode: str,
+) -> bool:
+    """Fast path of a 2-D cut along an index axis (a view parallel to the volume's axes — the
+    usual case): x, y don't depend on that axis, so the polygon is ONE 2-D mask applied to a
+    range of slabs at once (~50 ms instead of ~1 s on 512²×621). False → not applicable."""
+    eps = 1e-9
+    for a in (2, 1, 0):  # ijk axis the cut extrudes along
+        rest = [c for c in (0, 1, 2) if c != a]
+        if abs(A[0, a]) > eps or abs(A[1, a]) > eps:
+            continue
+        if z is not None and (np.any(np.abs(A[2, rest]) > eps) or abs(A[2, a]) < eps):
+            continue
+        cols, rows = rest  # numpy order [k, j, i]: the larger ijk axis varies slowest
+        cc = np.arange(g.size[cols], dtype=np.float64)
+        rr = np.arange(g.size[rows], dtype=np.float64)
+        x = A[0, cols] * cc[None, :] + A[0, rows] * rr[:, None] + b[0]
+        y = A[1, cols] * cc[None, :] + A[1, rows] * rr[:, None] + b[1]
+        xi = np.rint((x - lo[0]) / res).astype(np.int64)
+        yi = np.rint((y - lo[1]) / res).astype(np.int64)
+        ok = (xi >= 0) & (yi >= 0) & (xi < grid.shape[1]) & (yi < grid.shape[0])
+        inside = np.zeros(ok.shape, dtype=bool)
+        inside[ok] = grid[yi[ok], xi[ok]]
+        n = g.size[a]
+        t0, t1 = 0, n - 1
+        if z is not None:  # z = A[2,a]·t + b[2] within [z0, z1]
+            ta, tb = sorted(((z[0] - b[2]) / A[2, a], (z[1] - b[2]) / A[2, a]))
+            t0, t1 = max(0, int(np.ceil(ta - 1e-9))), min(n - 1, int(np.floor(tb + 1e-9)))
+        view = np.moveaxis(mask, 2 - a, 0)  # (along a, rows, cols)
+        if mode == "keep":
+            view[:t0] = 0
+            view[t1 + 1 :] = 0
+            if t0 <= t1:
+                view[t0 : t1 + 1, ~inside] = 0
+        elif t0 <= t1:
+            view[t0 : t1 + 1, inside] = 1 if mode == "add" else 0
+        return True
+    return False
+
+
+def _cut(mask: np.ndarray, g: Geometry, st: dict[str, Any]) -> None:
+    """Scissors: voxels whose projection (M · world, divided by w) falls inside the polygon
+    (and within the z range, if any) are filled (add), cleared (erase) — or everything
+    OUTSIDE is cleared (keep). M is affine for a 2-D view, perspective for the 3-D view.
+
+    Per slab k the map (i, j) → (x, y) is a homography; its inverse takes the polygon's
+    bounding box back to the few voxels that can be inside, so a cut costs ~ its area, not
+    the volume (full 512²×621 volume, unlimited depth: ~1.3 s → well under that)."""
+    M = np.asarray(st["M"], dtype=np.float64).reshape(4, 4)
+    poly = np.asarray(st["poly"], dtype=np.float64)
+    affine = np.allclose(M[3], [0, 0, 0, 1])
+    # a 2-D cut is in mm: half the smallest voxel is fine enough; 3-D (tangent space): max grid
+    grid, lo, res = _poly_raster(poly, min(g.spacing) / 2 if affine else None)
+    hi = lo + (np.asarray(grid.shape[::-1]) - 1) * res
+    # world(i,j,k) = origin + D · (spacing ∘ ijk) → q = A · ijk + b (homogeneous)
+    A = M[:, :3] @ g.matrix @ np.diag(g.spacing)
+    b = M[:, :3] @ np.asarray(g.origin) + M[:, 3]
+    ni, nj, nk = g.size
+    z = st.get("z")
+    keep = st["mode"] == "keep"
+    value = 1 if st["mode"] == "add" else 0
+    if affine and _cut_extruded(mask, g, A, b, grid, lo, res, z, st["mode"]):
+        return
+    box = np.array([[lo[0], lo[1], 1], [hi[0], lo[1], 1], [lo[0], hi[1], 1], [hi[0], hi[1], 1]])
+    corners = np.array([[0, 0], [ni - 1, 0], [0, nj - 1], [ni - 1, nj - 1]], dtype=np.float64)
+    A32 = A.astype(np.float32)
+    for k in range(nk):
+        if z is not None and affine:
+            # one-slice cut: skip slabs entirely outside its depth (z affine → extremes at corners)
+            zc = corners @ A[2, :2] + A[2, 2] * k + b[2]
+            if zc.max() < z[0] or zc.min() > z[1]:
+                if keep:
+                    mask[k] = 0
+                continue
+        i0, i1, j0, j1 = 0, ni, 0, nj
+        H = np.array(
+            [
+                [A[0, 0], A[0, 1], A[0, 2] * k + b[0]],
+                [A[1, 0], A[1, 1], A[1, 2] * k + b[1]],
+                [A[3, 0], A[3, 1], A[3, 2] * k + b[3]],
+            ]
+        )
+        if abs(np.linalg.det(H)) > 1e-12:
+            v = box @ np.linalg.inv(H).T  # bbox corners → (i, j, 1)·s
+            if np.all(v[:, 2] > 1e-12):
+                ij = v[:, :2] / v[:, 2:3]
+                i0 = max(0, int(np.floor(ij[:, 0].min())) - 1)
+                i1 = min(ni, int(np.ceil(ij[:, 0].max())) + 2)
+                j0 = max(0, int(np.floor(ij[:, 1].min())) - 1)
+                j1 = min(nj, int(np.ceil(ij[:, 1].max())) + 2)
+        sl = mask[k]
+        if i0 >= i1 or j0 >= j1:
+            if keep:
+                sl[:] = 0
+            continue
+        # float32 (offsets folded in per slab): ~2× faster than float64, exact enough
+        ii = np.arange(i0, i1, dtype=np.float32)
+        jj = np.arange(j0, j1, dtype=np.float32)
+        q = (
+            A32[:, 0][:, None, None] * ii[None, None, :]
+            + A32[:, 1][:, None, None] * jj[None, :, None]
+            + (A[:, 2] * k + b).astype(np.float32)[:, None, None]
+        )  # (4, j, i)
+        w = q[3]
+        ok = w > 1e-9
+        inv = np.float32(1 / res) / np.where(ok, w, np.float32(1))
+        xi = np.rint(q[0] * inv - np.float32(lo[0] / res)).astype(np.int32)
+        yi = np.rint(q[1] * inv - np.float32(lo[1] / res)).astype(np.int32)
+        ok &= (xi >= 0) & (yi >= 0) & (xi < grid.shape[1]) & (yi < grid.shape[0])
+        if z is not None:
+            zz = q[2] / np.where(ok, w, np.float32(1))
+            ok &= (zz >= z[0]) & (zz <= z[1])
+        inside = np.zeros_like(ok)
+        inside[ok] = grid[yi[ok], xi[ok]]
+        sub = sl[j0:j1, i0:i1]
+        if keep:
+            sub[~inside] = 0
+            sl[:j0] = 0
+            sl[j1:] = 0
+            sl[:, :i0] = 0
+            sl[:, i1:] = 0
+        else:
+            sub[inside] = value
+
+
 def _edycja(ctx: EvalContext, inputs: dict, p: dict) -> dict[str, Any]:
     seg = _first(inputs, "in", SEG, required=False)
     vol = _first(inputs, "ref", VOL, required=False)
@@ -296,9 +460,15 @@ def _edycja(ctx: EvalContext, inputs: dict, p: dict) -> dict[str, Any]:
         g, mask, ref = vol.geometry, np.zeros(vol.geometry.shape_kji, np.uint8), vol.ref
     else:
         raise GraphError("Podłącz segment do poprawy albo wolumen (pusty start)")
-    n = sum(len(st["p"]) for st in p["strokes"]) or 1
+    # a cut costs about as much as a few hundred brush spheres
+    n = sum(400 if st.get("kind") == "cut" else len(st["p"]) for st in p["strokes"]) or 1
     done = 0
     for st in p["strokes"]:
+        if st.get("kind") == "cut":
+            _cut(mask, g, st)
+            done += 400
+            ctx.report(done / n, "Nożyce")
+            continue
         value = 0 if st["mode"] == "erase" else 1
         for pt in st["p"]:
             _paint(mask, g, pt, st["r"], value)
@@ -333,7 +503,7 @@ register(
         params=(Param("strokes", "Pociągnięcia", "strokes", []),),
         run=_edycja,
         widget="brush",
-        version=2,  # info.strokes
+        version=3,  # 2: info.strokes · 3: scissors cuts
     )
 )
 
@@ -462,20 +632,37 @@ register(
 
 def _wyspy(ctx: EvalContext, inputs: dict, p: dict) -> dict[str, Any]:
     s = _first(inputs, "in", SEG)
-    img = to_sitk((s.array() > 0).astype(np.uint8), s.geometry)
+    # One copy into ITK, one uint32 label image (4 B/voxel), viewed — never copied — from
+    # NumPy. Component sizes are counted in pieces and a keep-table per label picks the
+    # result (no RelabelComponent: that was a second 4 B/voxel image, 2 GB on 512²×2000).
+    img = to_sitk(s.array(), s.geometry)
     cc = sitk.ConnectedComponent(img, False)  # face connectivity (positional-only in SimpleITK)
+    del img
+    labels = sitk.GetArrayViewFromImage(cc)
+    flat = labels.reshape(-1)
+    sizes = np.zeros(1, np.int64)
+    for q in range(0, flat.size, 1 << 24):
+        c = np.bincount(flat[q : q + (1 << 24)])
+        if c.size > sizes.size:
+            sizes = np.pad(sizes, (0, c.size - sizes.size))
+        sizes[: c.size] += c
+    sizes[0] = 0  # background
     vox_mm3 = float(np.prod(s.geometry.spacing))
+    keep = np.zeros(sizes.size, np.bool_)
     if p["mode"] == "largest":
-        rel = sitk.RelabelComponent(cc, sortByObjectSize=True)
-        mask, _ = from_sitk(rel)
-        mask = (mask >= 1) & (mask <= int(p["count"]))
-        tag = f"{int(p['count'])} największ{'a' if int(p['count']) == 1 else 'e'}"
+        n = int(p["count"])
+        top = np.argsort(sizes)[::-1][:n]
+        keep[top[sizes[top] > 0]] = True
+        tag = f"{n} największ{'a' if n == 1 else 'e'}"
     else:
-        min_vox = int(np.ceil(p["min_mm3"] / vox_mm3))
-        rel = sitk.RelabelComponent(cc, minimumObjectSize=max(1, min_vox), sortByObjectSize=True)
-        mask, _ = from_sitk(rel)
-        mask = mask > 0
+        min_vox = max(1, int(np.ceil(p["min_mm3"] / vox_mm3)))
+        keep[sizes >= min_vox] = True
+        keep[0] = False
         tag = f"≥ {p['min_mm3']:g} mm³"
+    mask = np.empty(labels.shape, np.bool_)
+    for sl in _slabs(labels.shape[0]):
+        np.take(keep, labels[sl], out=mask[sl])
+    del labels, flat, cc
     return {
         "out": _mask_out(
             ctx,

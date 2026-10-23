@@ -18,7 +18,19 @@ export async function pickImportPaths(kind: "folders" | "files"): Promise<string
   const r = await open({
     directory: kind === "folders",
     multiple: true,
-    title: kind === "folders" ? "Wybierz foldery z DICOM" : "Wybierz pliki (DICOM, NIfTI, NRRD, MHA)",
+    title: kind === "folders" ? "Wybierz foldery z DICOM" : "Wybierz pliki (DICOM, NIfTI, NRRD, MHA, STL, OBJ, PLY)",
+  });
+  return Array.isArray(r) ? r : typeof r === "string" ? [r] : [];
+}
+
+/** Mesh files (STL / OBJ / PLY). */
+export async function pickMeshFiles(): Promise<string[]> {
+  if (!inTauri()) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({
+    multiple: true,
+    title: "Wybierz mesh (STL, OBJ, PLY)",
+    filters: [{ name: "Mesh", extensions: ["stl", "obj", "ply", "STL", "OBJ", "PLY"] }],
   });
   return Array.isArray(r) ? r : typeof r === "string" ? [r] : [];
 }
@@ -62,4 +74,22 @@ export async function onCloseRequested(beforeClose: () => Promise<void>): Promis
       await getCurrentWindow().destroy();
     }
   });
+}
+
+/** Native "Save as" for a file the sidecar writes (the webview has no file-system access);
+ * a download in a plain browser. Resolves to the chosen path, or null when cancelled. */
+export async function saveFileDialog(defaultName: string, ext: string, label: string): Promise<string | null> {
+  if (!inTauri()) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const path = await save({ title: "Zapisz", defaultPath: defaultName, filters: [{ name: label, extensions: [ext] }] });
+  if (!path) return null;
+  return path.toLowerCase().endsWith(`.${ext}`) ? path : `${path}.${ext}`;
+}
+
+export function browserDownload(blob: Blob, name: string): void {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }

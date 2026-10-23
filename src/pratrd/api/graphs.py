@@ -54,6 +54,20 @@ def put_graph(request: Request, wid: str, gid: str, body: dict = Body(...)) -> d
     return {"ok": True}
 
 
+_CACHE_BUDGET_MIN = 1 << 30
+
+
+def cache_budget(settings: dict[str, Any]) -> int:
+    """Cache budget from the app settings. A missing, broken or tiny value (e.g. 0 from a
+    32-bit overflow in an old front) falls back to the default instead of emptying the
+    cache after every evaluation."""
+    try:
+        b = int(settings.get("cacheBytes", _CACHE_BUDGET_DEFAULT))
+    except (TypeError, ValueError):
+        return _CACHE_BUDGET_DEFAULT
+    return b if b >= _CACHE_BUDGET_MIN else _CACHE_BUDGET_DEFAULT
+
+
 _evaluators: dict[str, Evaluator] = {}
 _running: dict[tuple[str, str, str], Job] = {}
 _lock = threading.Lock()
@@ -77,9 +91,7 @@ def evaluate(request: Request, wid: str, gid: str, body: dict = Body(...)) -> di
     if prev is not None:
         st.jobs.cancel(prev.id)
 
-    budget = int(
-        read_json(st.config.app_settings_file, {}).get("cacheBytes", _CACHE_BUDGET_DEFAULT)
-    )
+    budget = cache_budget(read_json(st.config.app_settings_file, {}))
 
     def run(job: Job) -> dict[str, Any]:
         res = ev.evaluate(job, gid, graph, targets, quality)  # type: ignore[arg-type]

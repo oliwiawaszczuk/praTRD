@@ -3,7 +3,7 @@
   import "@fontsource/jetbrains-mono/600.css";
   import "#lib/ui/tokens.css";
 
-  import { onMount, type Component } from "svelte";
+  import { onMount, untrack, type Component } from "svelte";
   import { waitForSidecar } from "#lib/core/api.svelte.ts";
   import { flushWorkspace, loadWorkspaces, wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
   import { flushAppSettings, loadAppSettings } from "#lib/core/appSettings.svelte.ts";
@@ -26,8 +26,19 @@
   import WorkspaceChip from "#lib/ui/WorkspaceChip.svelte";
   import Placeholder from "#lib/tabs/Placeholder.svelte";
   import Ustawienia from "#lib/tabs/ustawienia/Ustawienia.svelte";
+  import Tablica from "#lib/tabs/tablica/Tablica.svelte";
+  import Notatki from "#lib/tabs/notatki/Notatki.svelte";
+  import Dokumentacja from "#lib/tabs/dokumentacja/Dokumentacja.svelte";
+  import FloatingNotePad from "#lib/tabs/notatki/FloatingNotePad.svelte";
+  import Toasts from "#lib/ui/Toasts.svelte";
+  import ShortcutsModal from "#lib/ui/ShortcutsModal.svelte";
+  import { navRequest, type TabKey } from "#lib/core/nav.svelte.ts";
+  import { restoreNotePad } from "#lib/core/notePad.svelte.ts";
+  import { flushNote } from "#lib/tabs/notatki/notes.svelte.ts";
+  import { dropOnBoard, flushBoard } from "#lib/tabs/tablica/board.svelte.ts";
+  import { flushAppDocs, loadAppDocs } from "#lib/tabs/dokumentacja/appdocs.svelte.ts";
 
-  type Tab = "dane" | "scena" | "tablica" | "notatki" | "dokumentacja" | "ustawienia";
+  type Tab = TabKey;
 
   const TABS: { key: Tab; label: string }[] = [
     { key: "dane", label: "Dane" },
@@ -38,14 +49,16 @@
     { key: "ustawienia", label: "Ustawienia" },
   ];
 
-  const PLACEHOLDERS: Partial<Record<Tab, { stage: string; text: string }>> = {
-    tablica: { stage: "E6", text: "Swobodna tablica na zrzuty viewportu i notatki." },
-    notatki: { stage: "E6", text: "Notatki Markdown i pływający notatnik." },
-    dokumentacja: { stage: "E6", text: "Poradnik i opisy node'ów." },
-  };
+  const PLACEHOLDERS: Partial<Record<Tab, { stage: string; text: string }>> = {};
 
-  // Real tab components replace placeholders as stages land.
-  const COMPONENTS: Partial<Record<Tab, Component>> = { dane: Dane, scena: Scena, ustawienia: Ustawienia };
+  const COMPONENTS: Partial<Record<Tab, Component>> = {
+    dane: Dane,
+    scena: Scena,
+    tablica: Tablica,
+    notatki: Notatki,
+    dokumentacja: Dokumentacja,
+    ustawienia: Ustawienia,
+  };
 
   type Boot = "booting" | "ready" | "error";
   let boot = $state<Boot>("booting");
@@ -60,6 +73,12 @@
   let chipOpen = $state(false);
   let dropping = $state(false);
 
+  // cross-tab requests (node "(i)" → Dokumentacja, screenshot toast → Tablica)
+  $effect(() => {
+    const r = navRequest();
+    if (r && boot === "ready") untrack(() => selectTab(r.tab));
+  });
+
   function selectTab(t: Tab): void {
     activeTab = t;
     if (!visited.has(t)) visited = new Set(visited).add(t);
@@ -72,7 +91,8 @@
       await waitForSidecar((ms) => (bootProgress = 70 * (1 - Math.exp(-ms / 2500))));
       bootMsg = "Wczytywanie workspace'u…";
       bootProgress = 80;
-      await Promise.all([loadWorkspaces(), loadAppSettings()]);
+      await Promise.all([loadWorkspaces(), loadAppSettings(), loadAppDocs()]);
+      restoreNotePad();
       connectEvents();
       await loadLibrary();
       bootProgress = 100;
@@ -87,7 +107,8 @@
 
   onMount(() => {
     void start();
-    const flushAll = () => Promise.all([flushWorkspace(), flushAppSettings(), flushGraph()]).then(() => {});
+    const flushAll = () =>
+      Promise.all([flushWorkspace(), flushAppSettings(), flushGraph(), flushNote(), flushBoard(), flushAppDocs()]).then(() => {});
     const unsubs = [
       onWorkspaceMenu((a) => {
         if (boot !== "ready") return;
@@ -101,6 +122,7 @@
         over: (on) => (dropping = on && boot === "ready"),
         drop: (paths) => {
           if (boot !== "ready") return;
+          if (activeTab === "tablica" && dropOnBoard(paths)) return; // images onto the board
           selectTab("dane");
           void scanPaths(paths);
         },
@@ -111,6 +133,9 @@
       void flushWorkspace({ keepalive: true });
       void flushAppSettings({ keepalive: true });
       void flushGraph({ keepalive: true });
+      void flushNote({ keepalive: true });
+      void flushBoard({ keepalive: true });
+      void flushAppDocs({ keepalive: true });
     };
     window.addEventListener("pagehide", onUnload);
     return () => {
@@ -183,11 +208,14 @@
   <div class="drop">
     <div class="drop-box">
       <Icon name="folderIn" size={36} />
-      <span>Upuść, aby zaimportować serie</span>
+      <span>{activeTab === "tablica" ? "Upuść obrazy na tablicę" : "Upuść, aby zaimportować serie"}</span>
     </div>
   </div>
 {/if}
 
+<FloatingNotePad />
+<ShortcutsModal />
+<Toasts />
 <JobTray />
 <DialogHost />
 

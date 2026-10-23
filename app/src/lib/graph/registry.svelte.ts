@@ -25,6 +25,8 @@ export function defaultParams(t: NodeTypeSchema): Record<string, unknown> {
 
 export const DOMAIN_COLOR: Record<string, string> = {
   wolumen: "#5b9bd5",
+  filtry: "#64b5f6",
   segmentacja: "#b48ce0",
   pomiary: "#f2994a",
+  mesh: "#4db6ac",
 };

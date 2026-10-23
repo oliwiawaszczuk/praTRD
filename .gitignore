@@ -33,8 +33,10 @@ source/*
 *.nii.gz
 *.nrrd
 
-# Dane per-user aplikacji
+# Dane per-user aplikacji (notatki i tablice mogą zawierać zrzuty z danych pacjenta)
 workspaces/
+boards/
+notes/
 app_settings.json
 app_docs.json
 

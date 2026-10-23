@@ -22,6 +22,19 @@ class Config:
     def app_settings_file(self) -> Path:
         return self.root / "app_settings.json"
 
+    # Global (not per-workspace) like in praSzczur: notes, whiteboards, user docs.
+    @property
+    def notes_dir(self) -> Path:
+        return self.root / "notes"
+
+    @property
+    def boards_dir(self) -> Path:
+        return self.root / "boards"
+
+    @property
+    def app_docs_file(self) -> Path:
+        return self.root / "app_docs.json"
+
 
 def from_env() -> Config:
     root = Path(os.environ.get("PRATRD_ROOT", Path.cwd())).resolve()

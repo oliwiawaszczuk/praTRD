@@ -23,12 +23,13 @@ import numpy as np
 from ..events import EventHub
 from ..jobs import Job
 from ..jsonio import read_json, write_json
+from ..meshes import store as mesh_store
 from ..volumes import store
 from ..volumes.geometry import Geometry
 from ..volumes.importer import plane_names
 from ..volumes.library import Library
 from .types import REGISTRY, NodeType
-from .values import ARRAYS, DataValue, VolumeValue
+from .values import ARRAYS, DataValue, MeshValue, VolumeValue
 
 Quality = Literal["preview", "full"]
 
@@ -86,34 +87,93 @@ class EvalContext:
         ref = self.key if socket == "out" else _hash24(self.key + "|" + socket)
         path = self._ev.ws_dir / "cache" / f"{ref}.zarr"
         label = kind != "wolumen"
-        if label:
-            info = {**info, **label_stats(arr, g)}
-        if not path.is_dir():
+        arr = np.ascontiguousarray(arr)
+        if path.is_dir():
+            if label:  # same key = same voxels: the census stored with the result
+                saved = store.read_meta(path).get("info", {})
+                info = saved if "voxels" in saved else {**info, **label_stats(arr, g)}
+        else:
             w = store.VolumeWriter(path, g, arr.dtype, label=label)
+
+            def attrs(stats: dict[str, Any]) -> dict[str, Any]:
+                nonlocal info
+                if label:  # the writer's histogram IS the label census — no second pass
+                    counts = {int(k): int(c) for k, c in stats.get("labels", {}).items()}
+                    info = {**info, **census(counts, g)}
+                return {"source": "node", "info": info, "planes": plane_names(g)}
+
             try:
-                w.append(np.ascontiguousarray(arr))
-                w.finish(lambda p: None, {"source": "node", "info": info, "planes": plane_names(g)})
+                w.append(arr)
+                w.finish(lambda p: None, attrs)
             except BaseException:
                 w.abort()
                 raise
+        # the next node reads this result from memory, not by decoding what was just written
+        ARRAYS.put(path, 0, arr)
         return VolumeValue(ref=ref, path=path, level=0, geometry=g, info=info, kind=kind)
+
+    def mesh_result(
+        self, verts: np.ndarray, faces: np.ndarray, info: dict[str, Any], socket: str = "out"
+    ) -> MeshValue:
+        """Persist an output surface (world LPS mm); its stats (area, volume, closed) join
+        `info`. The next node gets the arrays from memory."""
+        ref = self.key if socket == "out" else _hash24(self.key + "|" + socket)
+        path = self._ev.ws_dir / "cache" / f"{ref}.mesh"
+        if path.is_dir():
+            meta = mesh_store.read_meta(path)
+        else:
+            meta = mesh_store.write_mesh(path, verts, faces, info)
+        v = np.ascontiguousarray(verts, dtype=np.float32)
+        mesh_store.MESHES.put(path, v, np.ascontiguousarray(faces, dtype=np.int64))
+        return MeshValue(ref=ref, path=path, info=mesh_info(meta))
+
+    def library_mesh(self, mid: str) -> MeshValue:
+        """A mesh imported into the workspace (Dane / node "Plik mesha")."""
+        if not mid:
+            raise GraphError("Nie wybrano pliku mesha")
+        path = mesh_store.mesh_path(self._ev.ws_dir, mid)
+        if not path.is_dir():
+            raise GraphError("Mesh nie istnieje w bibliotece — wczytaj plik ponownie")
+        return MeshValue(ref=mid, path=path, info=mesh_info(mesh_store.read_meta(path)))
+
+
+def mesh_info(meta: dict[str, Any]) -> dict[str, Any]:
+    """What node cards / viewports need about a mesh (info + counts + stats)."""
+    return {**meta.get("info", {}), "verts": meta["verts"], "faces": meta["faces"], **meta["stats"]}
+
+
+_COUNT_PIECE = 1 << 24  # voxels per bincount call (bincount copies its input to intp)
+
+
+def census(counts: dict[int, int], g: Geometry) -> dict[str, Any]:
+    """{label: voxels} → what node cards and measurements show (voxels, ml, per label)."""
+    vox_ml = float(np.prod(g.spacing)) / 1000.0
+    labels = {
+        str(i): {"voxels": c, "ml": round(c * vox_ml, 3)}
+        for i, c in sorted(counts.items())
+        if i and c
+    }
+    total = sum(c for i, c in counts.items() if i)
+    return {"voxels": total, "ml": round(total * vox_ml, 3), "labelStats": labels}
 
 
 def label_stats(arr: np.ndarray, g: Geometry) -> dict[str, Any]:
-    """Voxel counts and volumes per label — shown on node cards, used by measurements."""
-    counts = np.bincount(arr.ravel(), minlength=2) if arr.dtype.kind in "ui" else np.zeros(2, int)
-    vox_ml = float(np.prod(g.spacing)) / 1000.0
-    labels = {
-        str(i): {"voxels": int(c), "ml": round(float(c) * vox_ml, 3)}
-        for i, c in enumerate(counts)
-        if i and c
-    }
-    total = int(counts[1:].sum())
-    return {"voxels": total, "ml": round(total * vox_ml, 3), "labelStats": labels}
+    """Census counted from the voxels (fallback for results cached without one). In pieces:
+    one bincount over a 512²×2000 mask needed a 4 GB intp copy."""
+    counts = np.zeros(2, np.int64)
+    if arr.dtype.kind in "ui":
+        flat = arr.reshape(-1)
+        for p in range(0, flat.size, _COUNT_PIECE):
+            c = np.bincount(flat[p : p + _COUNT_PIECE])
+            if c.size > counts.size:
+                counts = np.pad(counts, (0, c.size - counts.size))
+            counts[: c.size] += c
+    return census({i: int(c) for i, c in enumerate(counts) if c}, g)
 
 
 VOLUME_KINDS = frozenset({"wolumen", "segment", "segmentacja"})
 DATA_KINDS = frozenset({"punkty", "tabela"})
+MESH_KIND = "mesh"
 
 
 def _hash24(s: str) -> str:
@@ -131,6 +191,10 @@ def value_from_json(ws_dir: Path, d: dict[str, Any]) -> Any:
             geometry=Geometry.from_json(d["geometry"]),
             info=d.get("info", {}),
             kind=d["kind"],
+        )
+    if d.get("kind") == MESH_KIND:
+        return MeshValue(
+            ref=d["ref"], path=mesh_store.mesh_path(ws_dir, d["ref"]), info=d.get("info", {})
         )
     if d.get("kind") in DATA_KINDS:
         return DataValue(d["kind"], d.get("value"))
@@ -352,7 +416,9 @@ class Evaluator:
         if not isinstance(m, dict):
             return None
         out = {s: value_from_json(self.ws_dir, d) for s, d in m["outputs"].items()}
-        if any(isinstance(v, VolumeValue) and not v.path.is_dir() for v in out.values()):
+        if any(
+            isinstance(v, (VolumeValue, MeshValue)) and not v.path.is_dir() for v in out.values()
+        ):
             return None
         os.utime(self._manifest(key))  # LRU age for pruning
         self._remember(key, out)
@@ -370,6 +436,8 @@ class Evaluator:
             if d.get("kind") in ("wolumen", "segment", "segmentacja"):
                 p = Library.volume_path(self.ws_dir, d["ref"])
                 size += sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+            elif d.get("kind") == MESH_KIND:
+                size += mesh_store.disk_bytes(mesh_store.mesh_path(self.ws_dir, d["ref"]))
         write_json(
             self._manifest(key), {"outputs": out_json, "bytes": size, "created": time.time()}
         )
@@ -393,6 +461,10 @@ class Evaluator:
                     p = Library.volume_path(self.ws_dir, out["ref"])
                     store.forget(p)
                     ARRAYS.forget(p)
+                    shutil.rmtree(p, ignore_errors=True)
+                elif out.get("kind") == MESH_KIND and len(out.get("ref", "")) == 24:
+                    p = mesh_store.mesh_path(self.ws_dir, out["ref"])
+                    mesh_store.MESHES.forget(p)
                     shutil.rmtree(p, ignore_errors=True)
             self._manifest(key).unlink(missing_ok=True)
             with self._lock:

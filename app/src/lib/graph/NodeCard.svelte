@@ -1,8 +1,12 @@
 <script lang="ts">
   import Icon from "#lib/ui/Icon.svelte";
   import ProgressRing from "#lib/ui/ProgressRing.svelte";
-  import type { NodeRun, VolumeOut } from "./evaluation.svelte.ts";
-  import { HEADER_H, NODE_W, PORT_R, ROW_H } from "./layout.ts";
+  import { VOLUME_KINDS, type MeshOut, type NodeRun, type VolumeOut } from "./evaluation.svelte.ts";
+  import { HEADER_H, NODE_W, PORT_R, ROW_H, THUMB_H } from "./layout.ts";
+  import { exportMesh, meshThumbUrl } from "#lib/core/meshes.svelte.ts";
+  import { inTauri } from "#lib/core/tauri.ts";
+  import { showError } from "#lib/ui/dialogs.svelte.ts";
+  import { toast } from "#lib/ui/toast.svelte.ts";
   import NodeThumb from "./NodeThumb.svelte";
   import ParamField from "./ParamField.svelte";
   import CropSummary from "./CropSummary.svelte";
@@ -10,6 +14,8 @@
   import MarkupWidgets from "./MarkupWidgets.svelte";
   import TableChart from "./TableChart.svelte";
   import { openTable } from "./tableView.svelte.ts";
+  import { nodeDoc, requestDocSection } from "#lib/tabs/dokumentacja/appdocs.svelte.ts";
+  import { goToTab } from "#lib/core/nav.svelte.ts";
   import type { TableValue } from "./tables.ts";
   import { num } from "#lib/ui/format.ts";
   import { DOMAIN_COLOR } from "./registry.svelte.ts";
@@ -45,11 +51,30 @@
     type.params.filter((p) => !p.showIf || node.params[p.showIf[0]] === p.showIf[1]),
   );
   const volOut = $derived.by(() => {
-    const o = run?.outputs ? Object.values(run.outputs).find((v) => ["wolumen", "segment", "segmentacja"].includes(v.kind)) : undefined;
+    const o = run?.outputs ? Object.values(run.outputs).find((v) => VOLUME_KINDS.includes(v.kind)) : undefined;
     return o as VolumeOut | undefined;
   });
-  const hasVolOut = $derived(type.outputs.some((o) => o.kind === "wolumen" || o.kind === "segment" || o.kind === "segmentacja"));
-  const state = $derived(run?.state ?? null);
+  const hasVolOut = $derived(type.outputs.some((o) => VOLUME_KINDS.includes(o.kind)));
+  const hasMeshOut = $derived(type.outputs.some((o) => o.kind === "mesh"));
+  const meshOut = $derived.by(() => {
+    const o = run?.outputs ? Object.values(run.outputs).find((v) => v.kind === "mesh") : undefined;
+    return o as MeshOut | undefined;
+  });
+  let exporting = $state(false);
+  async function onExport(): Promise<void> {
+    if (!meshOut || exporting) return;
+    exporting = true;
+    try {
+      const path = await exportMesh(meshOut.ref, meshOut.info.name ?? type.label);
+      if (path) toast(`Zapisano ${path.split(/[\\/]/).pop()}`, { icon: "check" });
+    } catch (e) {
+      await showError("Eksport nie powiódł się", e);
+    } finally {
+      exporting = false;
+    }
+  }
+  const kilo = (n: number) => (n >= 1e6 ? `${num(n / 1e6, 2)} mln` : n >= 1e4 ? `${num(n / 1e3, 0)} tys.` : n.toLocaleString("pl-PL"));
+  const runState = $derived(run?.state ?? null);
   // first table output (pomiary nodes) — chart on the card, full table in the window
   const tabPort = $derived(type.outputs.find((o) => o.kind === "tabela") ?? null);
   const tab = $derived.by(() => {
@@ -60,7 +85,7 @@
 
 <div
   class="node"
-  class:busy={state === "computing"}
+  class:busy={runState === "computing"}
   class:selected
   class:displayed
   style:transform="translate({node.x}px, {node.y}px)"
@@ -71,11 +96,22 @@
 >
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header style:height="{HEADER_H}px" onpointerdown={onheaderdown}>
-    <span class="dot {state ?? 'idle'}" title={run?.error ?? state ?? ""}></span>
+    <span class="dot {runState ?? 'idle'}" title={run?.error ?? runState ?? ""}></span>
     <span class="title">{type.label}</span>
-    {#if run?.ms !== undefined && state === "done"}<span class="ms">{run.ms} ms</span>{/if}
-    {#if run?.cached && state === "done"}<span class="ms">cache</span>{/if}
-    {#if hasVolOut}
+    {#if run?.ms !== undefined && runState === "done"}<span class="ms">{run.ms} ms</span>{/if}
+    {#if run?.cached && runState === "done"}<span class="ms">cache</span>{/if}
+    {#if meshOut && inTauri()}
+      <button
+        class="eye"
+        title="Eksport STL / OBJ / PLY"
+        disabled={exporting}
+        onpointerdown={(e) => e.stopPropagation()}
+        onclick={onExport}
+      >
+        {#if exporting}<ProgressRing size={13} />{:else}<Icon name="export" size={13} />{/if}
+      </button>
+    {/if}
+    {#if hasVolOut || hasMeshOut}
       <button
         class="eye"
         class:on={displayed}
@@ -98,10 +134,22 @@
         <Icon name="table" size={13} />
       </button>
     {/if}
-    <span class="info" title={type.description}><Icon name="info" size={12} /></span>
+    <button
+      class="info"
+      title="{nodeDoc(type.id, type.description).replace(/[#*`>]/g, '')}
+
+Kliknij: dokumentacja"
+      onpointerdown={(e) => e.stopPropagation()}
+      onclick={() => {
+        requestDocSection({ kind: "node", typeId: type.id });
+        goToTab("dokumentacja");
+      }}
+    >
+      <Icon name="info" size={12} />
+    </button>
   </header>
 
-  {#if state === "computing" && progress !== null}
+  {#if runState === "computing" && progress !== null}
     <div class="prog"><div class="bar" style:transform="scaleX({progress})"></div></div>
   {/if}
 
@@ -148,7 +196,7 @@
     {/each}
   {/if}
 
-  {#if run?.error && (state === "error" || state === "blocked")}
+  {#if run?.error && (runState === "error" || runState === "blocked")}
     <div class="error">{run.error}</div>
   {/if}
 
@@ -164,11 +212,35 @@
     </div>
   {/if}
 
+  {#if meshOut}
+    <div class="segstat" title="{meshOut.info.faces.toLocaleString('pl-PL')} trójkątów · {meshOut.info.verts.toLocaleString('pl-PL')} wierzchołków">
+      <i style:background={meshOut.info.color ?? "var(--port-mesh)"}></i>
+      {#if meshOut.info.closed}
+        <span class="ml">{num(meshOut.info.ml, 2)} ml</span>
+      {:else}
+        <span class="open" title="Mesh nie jest zamknięty ({meshOut.info.boundary} otwartych krawędzi) — objętość nieokreślona"><Icon name="alert" size={11} /></span>
+      {/if}
+      <span class="vx">{num(meshOut.info.area / 100, 1)} cm²</span>
+      <span class="vx tri"><Icon name="mesh" size={10} />{kilo(meshOut.info.faces)}</span>
+    </div>
+    <div class="thumbwrap" class:stale={runState === "stale" || runState === "computing"}>
+      <div class="mthumb" style:height="{THUMB_H}px">
+        {#key meshOut.ref}<img class="thumb" src={meshThumbUrl(meshOut.ref)} alt="" decoding="async" />{/key}
+      </div>
+      {#if quality === "preview"}<span class="q">podgląd</span>{/if}
+      {#if runState === "stale" || runState === "computing"}
+        <span class="thring"><ProgressRing size={22} value={runState === "computing" ? progress : null} /></span>
+      {/if}
+    </div>
+  {:else if hasMeshOut && (runState === "computing" || runState === "stale")}
+    <div class="skeleton"><ProgressRing size={30} value={progress} /></div>
+  {/if}
+
   {#if tabPort && tab?.chart}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div
       class="tabwrap"
-      class:stale={state === "stale" || state === "computing"}
+      class:stale={runState === "stale" || runState === "computing"}
       title="Kliknij: pełna tabela"
       onpointerdown={(e) => e.stopPropagation()}
       onclick={() => openTable(node.id, tabPort.id)}
@@ -176,12 +248,12 @@
       <TableChart table={tab} height={56} />
       {#if quality === "preview"}<span class="q">podgląd</span>{/if}
     </div>
-  {:else if tabPort && !tab && type.widget !== "markups" && (state === "computing" || state === "stale")}
+  {:else if tabPort && !tab && type.widget !== "markups" && (runState === "computing" || runState === "stale")}
     <div class="skeleton"><ProgressRing size={30} value={progress} /></div>
   {/if}
 
   {#if hasVolOut && volOut}
-    <div class="thumbwrap" class:stale={state === "stale" || state === "computing"}>
+    <div class="thumbwrap" class:stale={runState === "stale" || runState === "computing"}>
       <NodeThumb
         volRef={volOut.ref}
         window={volOut.info?.window}
@@ -192,11 +264,11 @@
             : undefined}
       />
       {#if quality === "preview"}<span class="q">podgląd</span>{/if}
-      {#if state === "stale" || state === "computing"}
-        <span class="thring"><ProgressRing size={22} value={state === "computing" ? progress : null} /></span>
+      {#if runState === "stale" || runState === "computing"}
+        <span class="thring"><ProgressRing size={22} value={runState === "computing" ? progress : null} /></span>
       {/if}
     </div>
-  {:else if hasVolOut && (state === "computing" || state === "stale")}
+  {:else if hasVolOut && (runState === "computing" || runState === "stale")}
     <div class="skeleton"><ProgressRing size={30} value={progress} /></div>
   {/if}
 </div>
@@ -286,8 +358,14 @@
   }
   .info {
     display: flex;
+    padding: 0;
     color: var(--text-dim-4);
-    cursor: help;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .info:hover {
+    color: var(--accent);
   }
   /* overlay, so the port rows never shift while a node computes */
   .prog {
@@ -397,6 +475,35 @@
     margin-left: auto;
     color: var(--text-dim-4);
     font-size: 0.56rem;
+  }
+  .segstat .tri {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: 6px;
+  }
+  .segstat .open {
+    display: flex;
+    color: var(--warn, #f2c94c);
+  }
+  .mthumb {
+    margin: 4px 10px 8px;
+    border-radius: 4px;
+    background: radial-gradient(circle at 50% 45%, #1c2423, #050606 75%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .mthumb img {
+    max-width: 100%;
+    max-height: 100%;
+    animation: fadein 0.25s ease;
+  }
+  @keyframes fadein {
+    from {
+      opacity: 0;
+    }
   }
   .thring {
     position: absolute;

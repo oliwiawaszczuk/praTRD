@@ -28,6 +28,7 @@ let view = $state<VolumeViewState | null>(null);
 let meta = $state.raw<VolumeMeta | null>(null);
 let overlayAlpha = $state(wsGet<number>("scena_ovAlpha", 0.45));
 let overlayOutline = $state(wsGet<boolean>("scena_ovOutline", true));
+let meshOpacity = $state(wsGet<number>("scena_meshOpacity", 1));
 
 export const scene = {
   get volumeId() {
@@ -63,7 +64,15 @@ export const scene = {
   get overlayOutline() {
     return overlayOutline;
   },
+  get meshOpacity() {
+    return meshOpacity;
+  },
 };
+
+export function setMeshOpacity(o: number): void {
+  meshOpacity = o;
+  wsSet("scena_meshOpacity", o);
+}
 
 export function setOverlayStyle(alpha: number, outline: boolean): void {
   overlayAlpha = alpha;
@@ -80,12 +89,27 @@ function persist(): void {
  * view state survives a change of the underlying volume as long as the key is the same. */
 export function bindVolume(v: VolumeEntry, m: VolumeMeta, key: string): void {
   meta = m;
-  if (key === viewKey && view) return;
+  if (key === viewKey && view) {
+    // same node, other value range (its input was shown until the result came, e.g. CT under
+    // a 0…1 vesselness map): the old window would paint it one flat grey — take the new one
+    if (!windowFits(view.wl, m.stats)) {
+      view.wl = { ...v.window };
+      view.tf = defaultTf(v);
+      persist();
+    }
+    return;
+  }
   const prevCursor = view?.cursor ?? null;
   viewKey = key;
   const saved = wsGet<VolumeViewState | null>(`scena_view_${key}`, null);
   // a new key keeps the cursor at the same anatomical point (source → result and back)
   view = saved ?? { cursor: prevCursor ?? centerWorld(m.levels[0]), wl: { ...v.window }, tf: defaultTf(v) };
+}
+
+/** A window that shows something of a volume with these stats. */
+function windowFits(wl: WL, st: VolumeMeta["stats"]): boolean {
+  const range = Math.max(1e-9, st.max - st.min);
+  return wl.width <= 20 * range && wl.center > st.min - wl.width && wl.center < st.max + wl.width;
 }
 
 export function selectVolume(id: string): void {

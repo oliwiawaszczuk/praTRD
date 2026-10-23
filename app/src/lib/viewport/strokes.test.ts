@@ -33,3 +33,39 @@ describe("rasterizeStrokes", () => {
     expect(out[3 * 10 + 5]).toBe(EDIT_ERASE);
   });
 });
+
+describe("scissors cuts on a slice", () => {
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  // g: 20 × 10 × 8, 0.5 × 0.5 × 2 mm → world x = i/2, y = j/2, z = 2k
+  it("erases the polygon inside, keeps the outside untouched", () => {
+    const out = new Uint8Array(10 * 20);
+    const any = rasterizeStrokes(out, g, 2, 3, [
+      { kind: "cut", mode: "erase", M: I, poly: [[1, 1], [3, 1], [3, 3], [1, 3]], z: null },
+    ]);
+    expect(any).toBe(true);
+    expect(out[4 * 20 + 4]).toBe(EDIT_ERASE); // x = 2, y = 2 mm
+    expect(out[0]).toBe(0);
+    expect(out[4 * 20 + 10]).toBe(0); // x = 5 mm: outside
+  });
+
+  it("keep = erase outside; z range limits the depth", () => {
+    const out = new Uint8Array(10 * 20);
+    rasterizeStrokes(out, g, 2, 3, [{ kind: "cut", mode: "keep", M: I, poly: [[1, 1], [3, 1], [3, 3], [1, 3]], z: null }]);
+    expect(out[4 * 20 + 4]).toBe(0);
+    expect(out[0]).toBe(EDIT_ERASE);
+    const one = new Uint8Array(10 * 20);
+    const cut = { kind: "cut" as const, mode: "add" as const, M: I, poly: [[1, 1], [3, 1], [3, 3], [1, 3]] as [number, number][], z: [5.5, 6.5] as [number, number] };
+    expect(rasterizeStrokes(one, g, 2, 3, [cut])).toBe(true); // z = 6 mm: inside the range
+    expect(rasterizeStrokes(one, g, 2, 2, [cut])).toBe(false); // z = 4 mm: outside
+  });
+});
+
+describe("polyRaster", () => {
+  it("fills a triangle (even-odd)", async () => {
+    const { polyRaster } = await import("./cuts.ts");
+    const r = polyRaster([[0, 0], [10, 0], [0, 10]], 1);
+    expect(r.nx).toBe(11);
+    expect(r.grid[2 * r.nx + 2]).toBe(1);
+    expect(r.grid[9 * r.nx + 9]).toBe(0);
+  });
+});

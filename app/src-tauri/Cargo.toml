@@ -1,6 +1,6 @@
 [package]
 name = "pratrd"
-version = "0.0.1"
+version = "0.1.0"
 description = "praTRD — DICOM 3D + node graph"
 authors = ["praoliwia"]
 edition = "2021"

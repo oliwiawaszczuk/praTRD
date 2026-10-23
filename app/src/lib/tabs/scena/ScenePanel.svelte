@@ -13,11 +13,13 @@
     setTf,
     setWL,
     setOverlayStyle,
+    setMeshOpacity,
     type Layout,
     type ViewId,
   } from "#lib/viewport/scene.svelte.ts";
   import WindowHistogram from "./WindowHistogram.svelte";
   import Icon from "#lib/ui/Icon.svelte";
+  import { copyValue } from "#lib/core/notePad.svelte.ts";
   import { nodeType } from "#lib/graph/registry.svelte.ts";
   import TableChart from "#lib/graph/TableChart.svelte";
   import { openTable, tableOf } from "#lib/graph/tableView.svelte.ts";
@@ -26,7 +28,8 @@
     vol,
     displayLabel,
     hasOverlay = false,
-  }: { vol: VolumeEntry | undefined; displayLabel: string; hasOverlay?: boolean } = $props();
+    hasMesh = false,
+  }: { vol: VolumeEntry | undefined; displayLabel: string; hasOverlay?: boolean; hasMesh?: boolean } = $props();
 
   // results of every measurement node, at a glance (click → full table + CSV)
   const results = $derived(
@@ -210,6 +213,21 @@
       </section>
     {/if}
 
+    {#if hasMesh}
+      <section class="ovs" title="Krycie mesha w widoku 3D (w 2D: kontur przekroju)">
+        <span class="ico ovb mico"><Icon name="mesh" size={16} /></span>
+        <svg class="fillico" width="18" height="18" viewBox="0 0 18 18"><path d="M2 15L6.5 4l4.5 11zM6.5 4h9l-4.5 11" fill="var(--port-mesh)" opacity={scene.meshOpacity * 0.85 + 0.1} /></svg>
+        <input
+          type="range"
+          min="0.1"
+          max="1"
+          step="0.05"
+          value={scene.meshOpacity}
+          oninput={(e) => setMeshOpacity(Number(e.currentTarget.value))}
+        />
+      </section>
+    {/if}
+
     {#if results.length}
       <section class="res" title="Wyniki pomiarów — kliknij, aby zobaczyć pełną tabelę i zapisać CSV">
         {#each results as r (r.id)}
@@ -228,10 +246,16 @@
     {/if}
 
     {#if scene.cursor}
-      <section class="cur" title="Kursor (LPS, mm)">
-        <span><i class="x">L</i>{num(scene.cursor[0], 1)}</span>
-        <span><i class="y">P</i>{num(scene.cursor[1], 1)}</span>
-        <span><i class="z">S</i>{num(scene.cursor[2], 1)}</span>
+      {@const c = scene.cursor}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <section
+        class="cur"
+        title="Kursor (LPS, mm) — klik: kopiuj · ⌘/Ctrl+klik: do przypiętej notatki"
+        onclick={(e) => copyValue(`L ${num(c[0], 1)} · P ${num(c[1], 1)} · S ${num(c[2], 1)} mm`, e)}
+      >
+        <span><i class="x">L</i>{num(c[0], 1)}</span>
+        <span><i class="y">P</i>{num(c[1], 1)}</span>
+        <span><i class="z">S</i>{num(c[2], 1)}</span>
       </section>
     {/if}
   {/if}
@@ -489,7 +513,16 @@
     flex: 1;
     accent-color: var(--port-segment);
   }
+  .ovb.mico {
+    display: flex;
+    color: var(--port-mesh);
+    cursor: default;
+  }
+  .ovs .mico ~ input {
+    accent-color: var(--port-mesh);
+  }
   .cur {
+    cursor: copy;
     flex-direction: row;
     justify-content: space-between;
     font-size: 0.66rem;

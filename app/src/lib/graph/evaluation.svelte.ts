@@ -33,10 +33,31 @@ export interface VolumeOut {
   geometry: { size: [number, number, number]; spacing: [number, number, number] };
 }
 
+/** A surface (node "mesh" output): world LPS mm, stats computed by the sidecar. */
+export interface MeshOut {
+  kind: "mesh";
+  ref: string;
+  info: {
+    name?: string;
+    color?: string;
+    ref?: string; // background volume
+    verts: number;
+    faces: number;
+    area: number;
+    ml: number;
+    closed: boolean;
+    boundary: number;
+    bounds: number[];
+    [k: string]: unknown;
+  };
+}
+
+export const VOLUME_KINDS = ["wolumen", "segment", "segmentacja"];
+
 export interface NodeRun {
   state: NodeRunState;
   error?: string;
-  outputs?: Record<string, VolumeOut | { kind: string; value: unknown }>;
+  outputs?: Record<string, VolumeOut | MeshOut | { kind: string; value: unknown }>;
   ms?: number;
   cached?: boolean;
   sig: string; // signature of the graph that produced it

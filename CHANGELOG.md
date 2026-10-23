@@ -2,6 +2,79 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/), wersje: [SemVer](https://semver.org/).
 
+## Poprawka — zakładka Ustawienia
+
+- Zakładka Ustawienia padała („Internal Error”, Svelte `each_key_duplicate`): rozmiary cache były liczone przesunięciem bitowym (`20 << 30` w JS = 0, `50 << 30` < 0), więc dwa przyciski miały klucz 0. Teraz mnożenie; „20 GB” zapisywałoby budżet 0, a 5 GB — 1 GB.
+- Sidecar: budżet cache brakujący, błędny albo < 1 GB → domyślne 20 GB (nigdy nie czyści całego cache po każdym przeliczeniu). Test.
+
+## [Unreleased] — E9 Filtry SimpleITK
+
+- **Nowa domena „Filtry (SimpleITK)”** — 9 node'ów, wszystkie parametry w mm:
+  - *Odszumianie* — dyfuzja anizotropowa krzywiznowa albo gradientowa (Perona–Malik), krok czasu z odstępu wokseli;
+  - *Krawędzie* — moduł gradientu albo LoG (σ w mm);
+  - *Naczyniowość* — wieloskalowy Frangi (rurki / płaszczyzny / kule), znormalizowany kontrastem w jednostkach obrazu → 0…1; próg 0,3 + Wyspy + Mesh daje drzewo naczyń z CTA;
+  - *Wyostrz* (maska nieostra), *Morfologia szarości* (dylatacja, erozja, otwarcie, zamknięcie, top-hat jasne/ciemne, kula w mm);
+  - *Arytmetyka* dwóch wolumenów (B próbkowany na siatkę A w świecie), *Maskuj wolumen* segmentem, *Mapa odległości* (mm, ze znakiem), *Korekcja pola N4* (MR).
+- Filtry lokalne liczone **warstwami z marginesem** (wynik zgodny z całym wolumenem — testy), postęp i anulowanie między warstwami; filtry globalne (dyfuzja, N4, odległość) z postępem i przerwaniem przez obserwatora ITK.
+- Mapy cech (gradient, naczyniowość, odległość) jako float32 z własnym oknem i bez modalności (bez presetów CT w HU).
+- **Próg na mapach 0…1:** krok przeciągania na histogramie zależy od zakresu danych (1 HU na CT, 0,001 na naczyniowości), pola liczbowe przyjmują ułamki.
+- **Widok node'a:** gdy wynik ma zupełnie inny zakres niż pokazywane wcześniej wejście (CT pod mapą 0…1), okno i preset 3D ustawiają się od nowa.
+- **Błąd naprawiony przy okazji:** widok tablicy na tymczasowy obraz SimpleITK (`GetArrayViewFromImage(f(img))`) mógł czytać zwolnioną pamięć — obraz trzymany w zmiennej, dopóki widok żyje.
+- Pomiary w `docs/03-wydajnosc.md`; smoke test zamrożonego sidecara: naczyniowość, dyfuzja, N4, mapa odległości. Testy: `tests/test_filtry.py` (14).
+
+## [Unreleased] — E8 Mesh
+
+- **Nowe gniazdo `mesh`** (powierzchnia trójkątów w świecie LPS mm) i domena **Mesh** w palecie:
+  - *Mesh z segmentu* — marching cubes po wygładzeniu maski Gaussem (σ w mm, domyślnie 0,3), warstwami po 64 przekroje (stała pamięć), mesh zamknięty i zorientowany na zewnątrz;
+  - *Wygładź mesh* — Taubin (bez kurczenia) albo Laplace;
+  - *Decymacja* — zwijanie krawędzi z błędem kwadrykowym (`fast-simplification`), odsetek trójkątów w %;
+  - *Plik mesha* — STL (ASCII/binarny), OBJ, PLY; układ LPS/RAS z nagłówka (jak Slicer) albo ręcznie; opcjonalne tło;
+  - *Mesh → segment* — wnętrze zamkniętego mesha na siatce wolumenu (parzystość promieni wzdłuż k, tylko pudełko mesha);
+  - *Statystyki mesha* — trójkąty, wierzchołki, powierzchnia, objętość (dywergencja), zamknięcie, wymiary.
+- **Widoki:** mesh w 3D (vtk.js, Phong, krycie w panelu, tło jako „duch”), w 2D kontur przekroju w kolorze mesha; markupy stawiane na powierzchni mesha; zrzut na Tablicę zawiera kontur.
+- **Karta node'a:** miniatura (widok z przodu, renderowana w sidecarze), ml / cm² / liczba △, ostrzeżenie dla otwartego mesha, **eksport STL / OBJ / PLY** (systemowe „Zapisz jako”, LPS).
+- **Import STL/OBJ/PLY** w zakładce Dane (przycisk *Pliki…* i upuszczenie na okno) oraz przyciskiem w node'zie — biblioteka meshy workspace'u (`meshes/`), ten sam plik nie dubluje się.
+- Sidecar: `/workspaces/{wid}/meshes` (lista, import, zmiana nazwy, usuwanie, `/data` binarnie, `thumb.png`, `export`); meshe w cache grafu (manifest, przycinanie budżetu, odtworzenie po restarcie); kopia LOD ≤ 1,5 mln △ dla widoków.
+- Wyniki pomiarów w `docs/03-wydajnosc.md` (mesh kości 7 mln △ w 4,3 s, 60 fps z meshem w widokach).
+- Smoke test zamrożonego sidecara: mesh z segmentu, decymacja, wokselizacja, eksport STL.
+- Testy: `tests/test_mesh.py` (17), `viewport/meshcut.test.ts`.
+
+## [0.1.0] — 2026-10-22
+
+Pierwsze wydanie: dane (DICOM, DICOM-SEG, NIfTI, NRRD, MHA, anonimizacja), Scena (3 przekroje + 3D,
+wspólny kursor), graf node'ów (wolumen, segmentacja, pomiary), narzędzia w widokach 2D i 3D
+(ziarna, pędzel, gumka, nożyce, markupy), tabele z CSV, Tablica, Notatki, Dokumentacja, skróty.
+Szczegóły etapów E0–E6 poniżej.
+
+### E7 — wydajność na dużych danych
+- `scripts/bench_large.py` (seria DICOM 512²×2000, NIfTI 1024²×1000) + wyniki w `docs/03-wydajnosc.md`.
+- Pełna rozdzielczość na serii 1 GB: **15 s / 7,9 GB → 8,3 s / 5,5 GB**; Próg 5,5 → 2,0 s; region growing 4,7 → 1,25 s.
+  - spis etykiet segmentu z histogramu zapisu (koniec 4 GB kopii w `bincount`), maski 0/1 przez `count_nonzero`;
+  - Próg warstwami do wyniku, maska bool jako widok uint8; Wyspy bez drugiego obrazu etykiet;
+  - wynik node'a od razu w pamięci podręcznej tablic (następny node nie dekoduje go z dysku).
+- Interfejs na wolumenie 2 GB: pierwszy obraz 3D 0,38 s, przewijanie i obrót 3D p50 16 / p95 18 ms.
+- `.gitignore`: `boards/` i `notes/` (mogą zawierać zrzuty z danych pacjenta).
+- README: funkcje i instalacja niepodpisanych instalatorów (macOS `xattr`, Windows SmartScreen).
+- Wersja 0.1.0 (Python, front, Tauri, Cargo, lockfile'y).
+
+## [Unreleased] — E6 Zakładki z praSzczur
+
+- **Tablica** (Konva, ładowana leniwie): tekst, kształty, pędzel, obrazy (przeciągnij / wklej / plik), warstwy ↑↓, cofanie 100 kroków, eksport całej tablicy do PNG, wiele tablic. Globalna; workspace pamięta ostatnią.
+- **Zrzut viewportu na Tablicę:** ikona aparatu w rogu widoku 2D (przekrój + nakładka + markupy) i 3D (render + markupy); obraz z podpisem („Osiowy 224/341 · seria”) ląduje na ostatniej tablicy — na żywo, jeśli jest otwarta; powiadomienie „Dodano do tablicy ›” przenosi do niej.
+- **Notatki:** lista z wyszukiwarką (strzałki + Enter), edytor z autozapisem, tytuł z pierwszej linii; **pływający notatnik** z przypiętą notatką nad całą aplikacją (ikona → podgląd → edycja, przeciągany, pozycja zapamiętana). **⌘/Ctrl+klik** na wartości (kursor, komórka tabeli, markup) dopisuje ją do notatki; zwykły klik kopiuje.
+- **Dokumentacja:** poradnik dla każdej zakładki + „Pierwsze kroki”, własne strony (kolejność przeciąganiem), node'y z rejestru — porty i parametry rysowane ze schematu, opis w Markdown edytowalny; ten sam opis pod **(i)** na karcie node'a, a klik w (i) otwiera jego sekcję.
+- **Okno skrótów** dla całej aplikacji (klawisz **?**, przycisk na Tablicy) — Scena, graf, Tablica, ogólne.
+- Powiadomienia (toasty), nawigacja między zakładkami (`core/nav.svelte.ts`).
+- Sidecar: `/notes`, `/boards` (+ zasoby obrazów: surowe bajty albo ścieżka z upuszczenia), `/app_docs`, `/export/png`; testy.
+- Dev: `VITE_PRATRD_PORT` — port sidecara w zwykłej przeglądarce, gdy 7433 zajmuje inna lokalna aplikacja.
+
+## Nożyce w Edycji pędzlem (po E5)
+
+- **Nożyce** (jak „Scissors” w Slicerze) w node'zie Edycja: kształt lasso / prostokąt / elipsa; operacja: usuń wnętrze, wypełnij wnętrze, zostaw tylko wnętrze; głębokość w 2D: cały wolumen albo tylko bieżący przekrój; w 3D cięcie wzdłuż kierunku patrzenia (stożek z perspektywą albo graniastosłup w orto), Shift+przeciągnięcie dalej obraca.
+- Cięcie zapisane jak pociągnięcie: macierz rzutu + wielokąt (mm / tangens kąta widzenia) — odtwarzane przy każdej zmianie wejścia; cofanie Cmd+Z / ↶ w karcie.
+- Natychmiastowy podgląd: 2D w shaderze (maska edycji na siatce wyniku), 3D na danych nakładki w miejscu (84 ms na 244×243×341); wynik z sidecara identyczny z podglądem.
+- Sidecar: widok równoległy do osi → maska 2D nakładana na zakres warstw (~0,03 s; cała głębokość 512²×621: 0,26 s), ogólny przypadek z ograniczeniem do obszaru przez odwróconą homografię warstwy (perspektywa: 0,54 s).
+
 ## [Unreleased] — E5 Pomiary
 
 - **Node'y pomiarów** (`nodes/pomiary.py`): Markupy (punkt, linijka, kąt, ROI) → punkty + tabela; Statystyki segmentu (woksele, mm³, ml, powierzchnia, min/max/średnia/SD/mediana — dla segmentu albo każdej etykiety, intensywność z podłączonego wolumenu lub tła segmentu); Histogram (cały wolumen albo w masce); Profil (wartości wzdłuż linijki, interpolacja liniowa co ½ woksela).

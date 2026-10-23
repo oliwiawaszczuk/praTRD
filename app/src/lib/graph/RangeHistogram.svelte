@@ -55,9 +55,12 @@
   function move(e: PointerEvent): void {
     if (!drag) return;
     const dv = ((vx(e) - drag.x) / W) * span;
-    const r = (v: number) => Math.round(v);
-    if (drag.mode === "lo") onchange(r(Math.min(drag.lo + dv, hi - 1)), hi);
-    else if (drag.mode === "hi") onchange(lo, r(Math.max(drag.hi + dv, lo + 1)));
+    // step follows the data range: 1 HU on CT, 0.001 on a 0…1 feature map (vesselness)
+    const q = 10 ** Math.min(0, Math.floor(Math.log10(span / 500)));
+    const dec = Math.max(0, -Math.round(Math.log10(q)));
+    const r = (v: number) => Number((Math.round(v / q) * q).toFixed(dec));
+    if (drag.mode === "lo") onchange(r(Math.min(drag.lo + dv, hi - q)), hi);
+    else if (drag.mode === "hi") onchange(lo, r(Math.max(drag.hi + dv, lo + q)));
     else onchange(r(drag.lo + dv), r(drag.hi + dv));
   }
 </script>
