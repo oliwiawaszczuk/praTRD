@@ -252,6 +252,8 @@ def check_graph(api: Api, wid: str, vid: str) -> None:
 
 
 def main() -> int:
+    # Windows runners default to cp1252, which cannot print the arrows / marks below.
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     dist = Path(sys.argv[1])
     exe = dist / ("sidecar.exe" if os.name == "nt" else "sidecar")
     port = free_port()
