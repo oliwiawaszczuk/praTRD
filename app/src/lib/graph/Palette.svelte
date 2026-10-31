@@ -3,8 +3,27 @@
   import { DOMAIN_COLOR, domainLabels, nodeTypes } from "./registry.svelte.ts";
   import type { NodeTypeSchema } from "./types.ts";
 
-  let { open = $bindable(true), ondrop }: { open?: boolean; ondrop: (typeId: string, x: number, y: number) => void } =
-    $props();
+  import { wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
+
+  let { ondrop }: { ondrop: (typeId: string, x: number, y: number) => void } = $props();
+
+  // fixed bar; only its width changes, by dragging the right edge
+  const MIN_W = 130;
+  const MAX_W = 360;
+  let width = $state(wsGet<number>("graph_paletteWidth", 170));
+  let resizing: { x0: number; w0: number } | null = null;
+  function onEdgeDown(e: PointerEvent): void {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resizing = { x0: e.clientX, w0: width };
+  }
+  function onEdgeMove(e: PointerEvent): void {
+    if (resizing) width = Math.min(MAX_W, Math.max(MIN_W, resizing.w0 + e.clientX - resizing.x0));
+  }
+  function onEdgeUp(): void {
+    if (!resizing) return;
+    resizing = null;
+    wsSet("graph_paletteWidth", Math.round(width));
+  }
 
   const STAGES: Record<string, string> = { dane: "Dane", przetwarzanie: "Przetwarzanie", wynik: "Wynik" };
 
@@ -36,11 +55,7 @@
   }
 </script>
 
-<aside class:open>
-  <button class="toggle" title={open ? "Zwiń listę" : "Lista node'ów"} onclick={() => (open = !open)}>
-    {open ? "‹" : "›"}
-  </button>
-  {#if open}
+<aside style:width="{width}px">
     <div class="list">
       {#each groups as g (g.domain)}
         <h5 style:color={DOMAIN_COLOR[g.domain]}>{domainLabels()[g.domain] ?? g.domain}</h5>
@@ -61,7 +76,15 @@
         {/each}
       {/each}
     </div>
-  {/if}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="edge"
+    title="Przeciągnij, aby zmienić szerokość"
+    onpointerdown={onEdgeDown}
+    onpointermove={onEdgeMove}
+    onpointerup={onEdgeUp}
+    onpointercancel={onEdgeUp}
+  ></div>
 </aside>
 
 {#if ghost}
@@ -71,35 +94,28 @@
 <style>
   aside {
     position: relative;
-    width: 14px;
     flex-shrink: 0;
     background: var(--bg-panel-2);
     border-right: 1px solid var(--line-1);
-    transition: width 0.18s ease;
   }
-  aside.open {
-    width: 170px;
-  }
-  .toggle {
+  .edge {
     position: absolute;
-    right: -1px;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 0;
+    right: -3px;
+    bottom: 0;
+    width: 7px;
     z-index: 3;
-    width: 14px;
-    height: 34px;
-    padding: 0;
-    font-size: 0.7rem;
-    color: var(--text-dim-3);
-    background: var(--bg-panel);
-    border: 1px solid var(--line-1);
-    border-radius: 4px 0 0 4px;
-    cursor: pointer;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .edge:hover,
+  .edge:active {
+    background: var(--accent-a30);
   }
   .list {
     height: 100%;
     overflow-y: auto;
-    padding: 10px 18px 10px 10px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
     gap: 3px;

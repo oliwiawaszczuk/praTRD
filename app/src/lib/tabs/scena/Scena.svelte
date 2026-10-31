@@ -18,7 +18,7 @@
   import type { Vec3 } from "#lib/viewport/geometry.ts";
   import { loadNodeTypes, nodeType } from "#lib/graph/registry.svelte.ts";
   import { graph, loadGraphs, nodeById } from "#lib/graph/store.svelte.ts";
-  import { bindVolume, scene } from "#lib/viewport/scene.svelte.ts";
+  import { bindVolume, requestFocus, scene } from "#lib/viewport/scene.svelte.ts";
   import ViewportGrid from "#lib/viewport/ViewportGrid.svelte";
   import ScenePanel from "./ScenePanel.svelte";
   import type { Markup } from "#lib/viewport/markups.ts";
@@ -36,22 +36,45 @@
     return startEvaluation();
   });
 
-  // What the viewports show: the output of the node with the eye, else a library volume.
-  const libVol = $derived(libraryVolumes().find((v) => v.id === scene.volumeId) ?? libraryVolumes()[0]);
-  const displayNode = $derived(graph.doc.display ? nodeById(graph.doc.display) : undefined);
+  // What the viewports show: the visible layers (nodes with the eye on, top first).
+  // displayNode = the active layer (or the topmost visible one): tools and status follow it.
+  const visibleLayers = $derived(
+    (graph.doc.layers ?? []).flatMap((l) => {
+      const n = l.hidden ? undefined : nodeById(l.node);
+      return n ? [n] : [];
+    }),
+  );
+  const displayNode = $derived(visibleLayers.find((n) => n.id === graph.doc.display) ?? visibleLayers[0]);
   const displayRun = $derived(displayNode ? bestRun(displayNode.id) : null);
-  const nodeOut = $derived.by(() => {
-    const r = displayRun;
+  const volOutOf = (id: string) => {
+    const r = bestRun(id);
     const o = r?.outputs ? Object.values(r.outputs).find((v) => VOLUME_KINDS.includes(v.kind)) : undefined;
     return (o as VolumeOut | undefined) ?? null;
-  });
+  };
+  const meshOutOf = (id: string) => {
+    const r = bestRun(id);
+    const o = r?.outputs ? Object.values(r.outputs).find((v) => v.kind === "mesh") : undefined;
+    return (o as MeshOut | undefined) ?? null;
+  };
+  const keyOf = (id: string) => `node:${graph.activeId}:${id}`;
+  const nodeOut = $derived(displayNode ? volOutOf(displayNode.id) : null);
   // a mesh node: the surface in every view, over its background volume (info.ref) or, for an
   // imported file without one, over whatever is already shown
-  const meshOut = $derived.by(() => {
-    const o = displayRun?.outputs ? Object.values(displayRun.outputs).find((v) => v.kind === "mesh") : undefined;
-    return (o as MeshOut | undefined) ?? null;
-  });
+  const meshOut = $derived(displayNode ? meshOutOf(displayNode.id) : null);
   const isLabel = (o: VolumeOut | null) => !!o && (o.kind === "segment" || o.kind === "segmentacja");
+  // background = the active layer if it is a plain volume, else the topmost visible volume
+  // layer — a segmentation is then drawn over THAT volume (placed in world space)
+  const baseNode = $derived(
+    [displayNode, ...visibleLayers].find((n) => n && volOutOf(n.id)?.kind === "wolumen"),
+  );
+  // overlay = the active layer if it is a segment(ation), else the topmost visible one
+  const ovNode = $derived(
+    isLabel(nodeOut) ? displayNode : visibleLayers.find((n) => isLabel(volOutOf(n.id))),
+  );
+  const meshLayers = $derived(visibleLayers.flatMap((n) => {
+    const m = meshOutOf(n.id);
+    return m ? [m] : [];
+  }));
   const bgOf = (o: VolumeOut) => (isLabel(o) ? (o.info.ref as string) : o.ref);
   // no result (error, missing seeds, first run): show what flows INTO the node, so its
   // tools (seeds, brush) have something to click on
@@ -64,10 +87,12 @@
     return null;
   });
   const target = $derived.by(() => {
+    const bo = baseNode ? volOutOf(baseNode.id) : null;
+    if (baseNode && bo) return { ref: bo.ref, key: keyOf(baseNode.id), out: bo };
     if (displayNode) {
       const key = `node:${graph.activeId}:${displayNode.id}`;
       if (meshOut && !nodeOut) {
-        const ref = meshOut.info.ref || untrack(() => shown)?.vol.id || libVol?.id;
+        const ref = meshOut.info.ref || untrack(() => shown)?.vol.id;
         return ref ? { ref, key, out: null } : null;
       }
       const src = nodeOut ?? nodeIn;
@@ -81,15 +106,15 @@
         ref = cur.vol.id;
       return ref ? { ref, key, out: nodeOut } : null;
     }
-    return libVol ? { ref: libVol.id, key: `lib:${libVol.id}`, out: null } : null;
+    return null;
   });
 
   // overlay spec (label volume + colours) for a displayed segment / segmentation
   let overlay = $state.raw<OverlaySpec | null>(null);
   $effect(() => {
-    const o = nodeOut;
-    const full = displayRun?.quality === "full";
-    const key = displayNode ? `node:${graph.activeId}:${displayNode.id}` : "";
+    const o = ovNode ? volOutOf(ovNode.id) : null;
+    const full = ovNode ? bestRun(ovNode.id)?.quality === "full" : false;
+    const key = ovNode ? keyOf(ovNode.id) : "";
     if (!o || !isLabel(o)) {
       overlay = null;
       return;
@@ -107,7 +132,7 @@
           o.kind === "segmentacja"
             ? Object.fromEntries(((o.info.labels as { id: number; color: string }[]) ?? []).map((l) => [l.id, l.color]))
             : { 1: (o.info.color as string) ?? "#7bc47f" };
-        overlay = { ref: o.ref, meta: m, colors, full, key, strokes: o.info.strokes as number | undefined };
+        overlay = { ref: o.ref, meta: m, colors, full, key, node: ovNode?.id, strokes: o.info.strokes as number | undefined };
       })
       .catch(() => {});
     return () => ctl.abort();
@@ -150,15 +175,62 @@
     commit();
   }
 
+  // the other visible segment layers (shown together with the editable overlay)
+  const extraSrc = $derived(
+    visibleLayers.flatMap((n) => {
+      const o = n.id === ovNode?.id ? null : volOutOf(n.id);
+      return o && isLabel(o) ? [{ node: n.id, o }] : [];
+    }),
+  );
+  let extraOverlays = $state.raw<OverlaySpec[]>([]);
+  // run-state churn re-derives `extraSrc`; only a change of what is shown reloads anything
+  const extraSig = $derived(JSON.stringify(extraSrc.map((e) => [e.node, e.o.ref, e.o.info.labels ?? e.o.info.color ?? null])));
+  $effect(() => {
+    void extraSig;
+    const src = untrack(() => extraSrc);
+    if (!src.length) {
+      if (untrack(() => extraOverlays).length) extraOverlays = [];
+      return;
+    }
+    const ctl = new AbortController();
+    Promise.all(
+      src.map(async ({ node, o }) => {
+        const m = await volumeMeta(o.ref, ctl.signal);
+        const colors: Record<number, string> =
+          o.kind === "segmentacja"
+            ? Object.fromEntries(((o.info.labels as { id: number; color: string }[]) ?? []).map((l) => [l.id, l.color]))
+            : { 1: (o.info.color as string) ?? "#7bc47f" };
+        return { ref: o.ref, meta: m, colors, node, key: keyOf(node) } satisfies OverlaySpec;
+      }),
+    )
+      .then((list) => !ctl.signal.aborted && (extraOverlays = list))
+      .catch(() => {});
+    return () => ctl.abort();
+  });
+  // bottom → top, each with the colour picked on its layer
+  const shownExtras = $derived(
+    [...extraOverlays].reverse().map((o) => {
+      const c = (graph.doc.layers ?? []).find((l) => l.node === o.node)?.color;
+      return c && Object.keys(o.colors).length <= 1 ? { ...o, colors: { 1: c } } : o;
+    }),
+  );
+
+  // a colour picked on the layer wins over the node's own (single segments only)
+  const layerColor = $derived((graph.doc.layers ?? []).find((l) => l.node === ovNode?.id)?.color);
+  const shownOverlay = $derived(
+    overlay && layerColor && Object.keys(overlay.colors).length <= 1 ? { ...overlay, colors: { 1: layerColor } } : overlay,
+  );
+
   const layers = $derived.by<SliceLayers>(() => {
     const thr =
       displayNode?.type === "segmentacja/prog"
-        ? { lo: Number(displayNode.params.lo), hi: Number(displayNode.params.hi), color: "#7bc47f" }
+        ? { lo: Number(displayNode.params.lo), hi: Number(displayNode.params.hi), color: layerColor ?? "#7bc47f", node: displayNode.id }
         : null;
-    const color = (nodeOut?.info?.color as string) ?? "#7bc47f";
+    const color = layerColor ?? (nodeOut?.info?.color as string) ?? "#7bc47f";
     return {
       ...NO_LAYERS,
-      overlay,
+      overlay: shownOverlay,
+      extras: shownExtras,
       // threshold node: the 2-D views show the live threshold (exact, 60 fps) instead of a
       // possibly stale mask; the 3-D view keeps the computed mask
       threshold: thr,
@@ -176,7 +248,7 @@
       markups,
       focusMarkup: segTools.focusMarkup,
       onMarkups,
-      meshes: meshOut ? [{ ref: meshOut.ref, color: meshOut.info.color ?? "#4db6ac", name: meshOut.info.name ?? "Mesh" }] : [],
+      meshes: meshLayers.map((m) => ({ ref: m.ref, color: m.info.color ?? "#4db6ac", name: m.info.name ?? "Mesh" })),
       meshOpacity: scene.meshOpacity,
     };
   });
@@ -213,7 +285,10 @@
   let shown = $state.raw<{ vol: VolumeEntry; meta: VolumeMeta; key: string } | null>(null);
   $effect(() => {
     const t = target;
-    if (!t) return;
+    if (!t) {
+      shown = null; // last layer removed / hidden: empty scene
+      return;
+    }
     if (shown && shown.vol.id === t.ref && shown.key === t.key) return;
     const ctl = new AbortController();
     error = "";
@@ -233,7 +308,7 @@
     const st = displayRun?.state;
     const out = nodeOut ?? meshOut;
     if ((st === "error" || st === "blocked") && !out) return { kind: "error", text: displayRun?.error ?? "Błąd" };
-    if (!out || st === "computing" || (shown && shown.key !== `node:${graph.activeId}:${displayNode.id}`))
+    if (!out || st === "computing" || (shown && target && shown.key !== target.key))
       return { kind: "busy", text: `Liczenie: ${displayLabel}…` };
     return null;
   });
@@ -266,6 +341,10 @@
       e.preventDefault();
       if (e.shiftKey) redo();
       else undo();
+    }
+    if (!typing && !inGraph && hoverArea === "views" && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      requestFocus();
     }
     if (e.code === "Space" && e.ctrlKey && hoverArea) {
       e.preventDefault();
@@ -320,6 +399,11 @@
           <Icon name="cube" size={34} />
           <span>Brak wolumenów — zaimportuj serię w zakładce Dane.</span>
         </div>
+      {:else if graph.loaded && !visibleLayers.length}
+        <div class="empty">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+          <span>Scena jest pusta — włącz oczko na karcie w grafie.</span>
+        </div>
       {:else if error}
         <div class="empty err">{error}</div>
       {/if}
@@ -360,7 +444,12 @@
       {/if}
     </div>
   </div>
-  <ScenePanel vol={shown?.vol} displayLabel={displayNode ? displayLabel : ""} hasOverlay={!!overlay} hasMesh={!!meshOut} />
+  <ScenePanel
+    vol={shown?.vol}
+    roles={{ base: shown ? (baseNode?.id ?? (displayNode && !isLabel(nodeOut) && !meshOut ? displayNode.id : null)) : null, overlay: overlay ? (ovNode?.id ?? null) : null, extra: extraOverlays.map((o) => o.node ?? "") }}
+    hasOverlay={!!overlay || extraOverlays.length > 0}
+    hasMesh={meshLayers.length > 0}
+  />
   <CropModal />
   <TableModal />
   {#if maxArea}

@@ -8,9 +8,11 @@ import { getJson, sendJson } from "#lib/core/api.svelte.ts";
 import { debouncedSaver } from "#lib/core/persisted.ts";
 import { activeWorkspaceId, wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
 import { defaultParams, nodeType } from "./registry.svelte.ts";
-import type { GEdge, GNode, GraphDoc, GraphMeta } from "./types.ts";
+import type { GEdge, GNode, GraphDoc, GraphMeta, SceneLayer } from "./types.ts";
 
 const UNDO_MAX = 100;
+// output kinds the scene can show (evaluation.svelte.ts imports this module — no cycle)
+const SCENE_KINDS = ["wolumen", "segment", "segmentacja", "mesh"];
 
 let graphs = $state<GraphMeta[]>([]);
 let activeId = $state("");
@@ -67,6 +69,8 @@ export async function openGraph(id: string): Promise<void> {
   await saver.flush();
   const d = await getJson<GraphDoc>(`${wsPath()}/${id}/doc`);
   d.view ??= { x: 40, y: 30, zoom: 1 };
+  // documents from before layers: the eye node is the only layer
+  d.layers ??= d.display ? [{ node: d.display }] : [];
   activeId = id;
   doc = d;
   selection = new Set();
@@ -148,6 +152,11 @@ export function addNode(typeId: string, x: number, y: number, params?: Record<st
   const n: GNode = { id: uid(), type: typeId, x: Math.round(x), y: Math.round(y), params: { ...defaultParams(t), ...params } };
   doc.nodes.push(n);
   selection = new Set([n.id]);
+  // a node that produces something visible joins the scene at once (eye on, on top)
+  if (t.outputs.some((o) => SCENE_KINDS.includes(o.kind))) {
+    doc.layers = [{ node: n.id }, ...(doc.layers ?? [])];
+    doc.display = n.id;
+  }
   commit();
   return n;
 }
@@ -222,13 +231,48 @@ export function removeEdge(id: string): void {
 export function deleteNodes(ids: Set<string>): void {
   doc.nodes = doc.nodes.filter((n) => !ids.has(n.id));
   doc.edges = doc.edges.filter((e) => !ids.has(e.from) && !ids.has(e.to));
-  if (doc.display && ids.has(doc.display)) doc.display = null;
+  doc.layers = (doc.layers ?? []).filter((l) => !ids.has(l.node));
+  if (doc.display && ids.has(doc.display)) doc.display = doc.layers[0]?.node ?? null;
   selection = new Set();
   commit();
 }
 
+/** Make a node the active layer (added on top if it isn't a layer yet). */
 export function setDisplay(nodeId: string | null): void {
+  const layers = doc.layers ?? [];
+  if (nodeId && !layers.some((l) => l.node === nodeId)) doc.layers = [{ node: nodeId }, ...layers];
+  else if (nodeId) doc.layers = layers.map((l) => (l.node === nodeId ? { ...l, hidden: undefined } : l));
   doc.display = nodeId;
+  commit();
+}
+
+/** The eye on a node card: add it as the active layer, or remove it. */
+export function toggleLayer(nodeId: string): void {
+  const layers = doc.layers ?? [];
+  if (!layers.some((l) => l.node === nodeId)) return setDisplay(nodeId);
+  doc.layers = layers.filter((l) => l.node !== nodeId);
+  if (doc.display === nodeId) doc.display = doc.layers[0]?.node ?? null;
+  commit();
+}
+
+export function setLayerHidden(nodeId: string, hidden: boolean): void {
+  doc.layers = (doc.layers ?? []).map((l): SceneLayer => (l.node === nodeId ? { ...l, hidden } : l));
+  commit();
+}
+
+/** Display colour of a segment layer (view-only: no recomputation, not part of any cache key). */
+export function setLayerColor(nodeId: string, color: string): void {
+  doc.layers = (doc.layers ?? []).map((l): SceneLayer => (l.node === nodeId ? { ...l, color } : l));
+  commit();
+}
+
+/** Move a layer to index `to` (0 = top). */
+export function moveLayer(nodeId: string, to: number): void {
+  const layers = (doc.layers ?? []).filter((l) => l.node !== nodeId);
+  const l = (doc.layers ?? []).find((x) => x.node === nodeId);
+  if (!l) return;
+  layers.splice(Math.max(0, Math.min(layers.length, to)), 0, l);
+  doc.layers = layers;
   commit();
 }
 

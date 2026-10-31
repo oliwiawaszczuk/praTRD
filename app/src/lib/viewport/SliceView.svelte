@@ -4,7 +4,7 @@
   //  click / drag     → cursor (all views follow)
   //  right drag       → window/level         ctrl|⌘ + wheel / pinch → zoom at mouse
   //  middle or ⇧ drag → pan                  double click            → maximize
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { volumePath, type VolumeEntry, type VolumeMeta } from "#lib/core/library.svelte.ts";
   import { num } from "#lib/ui/format.ts";
   import {
@@ -23,7 +23,7 @@
   import { SliceLoader, type Slice, type SliceRequest } from "./slices.ts";
   import { SliceRenderer } from "./SliceRenderer.ts";
   import ProgressRing from "#lib/ui/ProgressRing.svelte";
-  import { hexRgb, NO_LAYERS, type BrushStroke, type SliceLayers, type Stroke } from "./layers.ts";
+  import { hexRgb, NO_LAYERS, type BrushStroke, type OverlaySpec, type SliceLayers, type Stroke } from "./layers.ts";
   import { planeMatrix, polyArea, shapePolygon } from "./cuts.ts";
   import { rasterizeStrokes } from "./strokes.ts";
   import MarkupLayer2D from "./MarkupLayer2D.svelte";
@@ -66,6 +66,18 @@
     void frameKey;
     centerW = null;
     scale = null;
+  });
+
+  // F: the slice intersection in the middle, zoomed in 2× from "whole volume"
+  let focusSeen = scene.focusTick;
+  $effect(() => {
+    const t = scene.focusTick;
+    if (t === focusSeen) return;
+    focusSeen = t;
+    const c = untrack(() => scene.cursor);
+    if (!c) return;
+    centerW = [...c] as Vec3;
+    scale = untrack(() => fit) * 2;
   });
 
   const fit = $derived(
@@ -164,49 +176,61 @@
   });
 
   // ── overlay (label volume, own geometry and pyramid) ────────────────────────
-  let ovDelivered = $state.raw<{ slice: Slice; req: SliceRequest } | null>(null);
-  let ovVisible = $state(false); // false when the current plane lies outside the overlay
-  const ovLoader = new SliceLoader((slice, req) => {
-    renderer?.uploadLabels(slice);
-    ovDelivered = { slice, req };
-  });
-  onDestroy(() => ovLoader.dispose());
+  // slot 0 = the editable overlay, 1.. = the other visible segment layers
+  const SLOTS = 4;
+  type Delivered = { slice: Slice; req: SliceRequest } | null;
+  let ovDelivered = $state.raw<Delivered[]>(Array(SLOTS).fill(null));
+  let ovVisible = $state<boolean[]>(Array(SLOTS).fill(false)); // false: the plane lies outside the overlay
+  const ovLoaders = Array.from(
+    { length: SLOTS },
+    (_, i) =>
+      new SliceLoader((slice, req) => {
+        renderer?.uploadLabels(slice, i);
+        ovDelivered = ovDelivered.map((d, k) => (k === i ? { slice, req } : d));
+      }),
+  );
+  onDestroy(() => ovLoaders.forEach((l) => l.dispose()));
+  // bottom → top: the others first, the editable one over them
+  const ovs = $derived<(OverlaySpec | null)[]>([layers.overlay, ...layers.extras.slice(0, SLOTS - 1)]);
   const ov = $derived(layers.overlay);
   const ovBasis = $derived(ov ? viewBasis(ov.meta.levels[0], plane) : null);
 
-  // LUT is (re)uploaded in draw() when it changes — never from an effect that could run
+  // LUTs are (re)uploaded in draw() when they change — never from an effect that could run
   // before the renderer exists (that left the colour table empty → black overlay).
-  let appliedLut = "";
+  let appliedLut: string[] = [];
 
   $effect(() => {
-    const o = ov;
-    const ob = ovBasis;
-    if (!o || !ob || !W || !H || !scene.cursor) {
-      ovVisible = false;
-      return;
-    }
-    let L = 0;
-    for (let n = 0; n < o.meta.levels.length; n++) {
-      const sp = o.meta.levels[n].spacing;
-      if (Math.max(sp[ob.uAxis], sp[ob.vAxis]) * pxPerMm * dpr <= 1.5) L = n;
-    }
-    const gL = o.meta.levels[L];
-    // the overlay slice through the plane currently shown (cursor moved onto this slice)
-    const ijk: Vec3 = [...(cursorIjk as Vec3)];
-    ijk[basis.sliceAxis] = sliceIdx;
-    const idx = Math.round(worldToIjk(gL, ijkToWorld(g0, ijk))[ob.sliceAxis]);
-    if (idx < 0 || idx >= gL.size[ob.sliceAxis]) {
-      ovVisible = false;
-      return;
-    }
-    ovVisible = true;
-    ovLoader.request({ path: volumePath(o.ref), axis: AXIS_NAME[ob.sliceAxis], index: idx, level: L });
+    ovs.forEach((o, i) => {
+      const ob = o ? viewBasis(o.meta.levels[0], plane) : null;
+      if (!o || !ob || !W || !H || !scene.cursor) {
+        ovVisible[i] = false;
+        return;
+      }
+      let L = 0;
+      for (let n = 0; n < o.meta.levels.length; n++) {
+        const sp = o.meta.levels[n].spacing;
+        if (Math.max(sp[ob.uAxis], sp[ob.vAxis]) * pxPerMm * dpr <= 1.5) L = n;
+      }
+      const gL = o.meta.levels[L];
+      // the overlay slice through the plane currently shown (cursor moved onto this slice)
+      const ijk: Vec3 = [...(cursorIjk as Vec3)];
+      ijk[basis.sliceAxis] = sliceIdx;
+      const idx = Math.round(worldToIjk(gL, ijkToWorld(g0, ijk))[ob.sliceAxis]);
+      if (idx < 0 || idx >= gL.size[ob.sliceAxis]) {
+        ovVisible[i] = false;
+        return;
+      }
+      ovVisible[i] = true;
+      ovLoaders[i].request({ path: volumePath(o.ref), axis: AXIS_NAME[ob.sliceAxis], index: idx, level: L });
+    });
   });
-  const ovShown = $derived(
-    ov && ovVisible && ovDelivered && ovDelivered.req.path === volumePath(ov.ref) && ov.meta.levels[ovDelivered.req.level]
-      ? ovDelivered
-      : null,
-  );
+  /** The delivered slice of slot i, if it belongs to the overlay now in that slot. */
+  const shownAt = (i: number): Delivered => {
+    const o = ovs[i];
+    const d = ovDelivered[i];
+    return o && ovVisible[i] && d && d.req.path === volumePath(o.ref) && o.meta.levels[d.req.level] ? d : null;
+  };
+  const ovShown = $derived(shownAt(0));
 
   /** World axis (0 x, 1 y, 2 z) an index axis mostly runs along. */
   const worldAxis = (c: 0 | 1 | 2): number => {
@@ -292,7 +316,7 @@
     const s = shown;
     const wl = scene.wl;
     const ci = cursorIjk;
-    void [W, H, dpr, cu, cv, pxPerMm, ci, s, wl, ovShown, layers, strokeTick, hover];
+    void [W, H, dpr, cu, cv, pxPerMm, ci, s, wl, ovDelivered, ovVisible, layers, strokeTick, hover];
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(draw);
   });
@@ -307,11 +331,17 @@
         c.height = ch;
       }
     }
-    const lutKey = JSON.stringify(ov?.colors ?? {});
-    if (renderer && lutKey !== appliedLut) {
-      renderer.setLut(ov?.colors ?? {});
-      appliedLut = lutKey;
-    }
+    ovs.forEach((o, i) => {
+      const lutKey = JSON.stringify(o?.colors ?? {});
+      if (renderer && lutKey !== appliedLut[i]) {
+        renderer.setLut(o?.colors ?? {}, i);
+        appliedLut[i] = lutKey;
+      }
+      if (!o && renderer && ovDelivered[i]) {
+        renderer.uploadLabels(null, i);
+        ovDelivered = ovDelivered.map((d, k) => (k === i ? null : d));
+      }
+    });
     if (renderer && shown && scene.wl) {
       const texelPx = Math.max(
         meta.levels[shown.req.level].spacing[basis.uAxis],
@@ -332,10 +362,14 @@
         center: scene.wl.center,
         width: scene.wl.width,
         smooth: texelPx < 6, // keep voxels crisp when zoomed far in
-        overlay:
-          ovShown && ov && ovBasis && !layers.threshold
-            ? { screenToTex: screenToTexOf(ov.meta.levels[ovShown.req.level], ovBasis), alpha: layers.alpha, outline: layers.outline }
-            : null,
+        overlays: [...ovs.keys()].reverse().flatMap((i) => {
+          const o = ovs[i];
+          const d = shownAt(i);
+          // the live threshold stands in for the result of its own node
+          if (!o || !d || (layers.threshold && o.node && o.node === layers.threshold.node)) return [];
+          const b = viewBasis(o.meta.levels[0], plane);
+          return [{ slot: i, screenToTex: screenToTexOf(o.meta.levels[d.req.level], b), alpha: layers.alpha, outline: layers.outline }];
+        }),
         threshold: layers.threshold
           ? { lo: layers.threshold.lo, hi: layers.threshold.hi, color: hexRgb(layers.threshold.color) }
           : null,
@@ -452,7 +486,7 @@
     return () => {
       renderer?.dispose();
       renderer = null;
-      appliedLut = "";
+      appliedLut = [];
     };
   });
 
@@ -476,6 +510,14 @@
     ijk[basis.vAxis] = Math.min(g0.size[basis.vAxis] - 1, Math.max(0, iv));
     ijk[basis.sliceAxis] = sliceIdx;
     setCursor(ijkToWorld(g0, ijk));
+  }
+
+  const lastDown: { t: number; c: Vec3 | null } = { t: -1e9, c: null };
+  function onDbl(): void {
+    if (layers.tool) return;
+    if (lastDown.c) setCursor(lastDown.c);
+    lastDown.t = -1e9;
+    toggleMaximized(plane);
   }
 
   function moveSlice(steps: number): void {
@@ -591,7 +633,14 @@
           : "cursor";
     host!.setPointerCapture(e.pointerId);
     drag = { mode, x: e.clientX, y: e.clientY, c: scene.wl?.center ?? 0, w: scene.wl?.width ?? 1, cu, cv };
-    if (mode === "cursor") cursorAt(x, y);
+    if (mode === "cursor") {
+      // first click of a possible double click: remember where the cursor was, so the
+      // double click (maximise) leaves the other views' slices untouched
+      const now = performance.now();
+      if (now - lastDown.t > 500) lastDown.c = scene.cursor ? ([...scene.cursor] as Vec3) : null;
+      lastDown.t = now;
+      cursorAt(x, y);
+    }
     if (mode === "paint") {
       painting = { p: [], r: layers.brushR, mode: tool === "erase" ? "erase" : "add" };
       paintAt(x, y);
@@ -694,7 +743,7 @@
   onpointerup={onUp}
   onpointercancel={onUp}
   onpointerleave={() => (hover = null)}
-  ondblclick={() => !layers.tool && toggleMaximized(plane)}
+  ondblclick={onDbl}
   oncontextmenu={(e) => e.preventDefault()}
 >
   <canvas class="gl" bind:this={glCanvas} style:width="{W}px" style:height="{H}px"></canvas>

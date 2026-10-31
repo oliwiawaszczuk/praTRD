@@ -17,7 +17,7 @@ import vtkVolumeMapper from "@kitware/vtk.js/Rendering/Core/VolumeMapper";
 import Constants from "@kitware/vtk.js/Rendering/Core/VolumeMapper/Constants";
 
 import type { LevelGeometry } from "#lib/core/library.svelte.ts";
-import { worldToIjk, type Vec3 } from "./geometry.ts";
+import { ijkToWorld, worldToIjk, type Vec3 } from "./geometry.ts";
 import { cutInGrid, type Cut } from "./cuts.ts";
 import type { TransferFunction } from "./presets.ts";
 import type { Voxels } from "./slices.ts";
@@ -86,6 +86,8 @@ export class VolumeRenderer3D {
   private ovCtf = vtkColorTransferFunction.newInstance();
   private ovOtf = vtkPiecewiseFunction.newInstance();
   private ovAdded = false;
+  // further segment layers: display only (no paint / pick), one actor per ref
+  private extras = new Map<string, { actor: ReturnType<typeof vtkVolume.newInstance>; mapper: ReturnType<typeof vtkVolumeMapper.newInstance> }>();
   // CPU copies for picking and live brush edits (the arrays handed to vtk.js, not copies)
   private bg: { data: Voxels; g: LevelGeometry } | null = null;
   private ov: { data: Uint8Array; g: LevelGeometry; scalars: ReturnType<typeof vtkDataArray.newInstance> } | null = null;
@@ -110,6 +112,8 @@ export class VolumeRenderer3D {
       if (!container.clientWidth || !container.clientHeight) return;
       this.grw.resize();
       this.render();
+      // a new aspect moves every projected point (layout switch) — overlays must follow
+      for (const cb of this.cameraListeners) cb();
     });
     this.ro.observe(container);
 
@@ -301,7 +305,7 @@ export class VolumeRenderer3D {
       if (this.ovAdded) ren.removeVolume(this.ovActor);
       this.ovAdded = false;
       this.ov = null;
-      this.setGhost(1);
+      this.setGhost(this.extras.size || this.meshes.size ? 0.18 : 1);
       return;
     }
     const image = vtkImageData.newInstance();
@@ -354,6 +358,75 @@ export class VolumeRenderer3D {
   }
 
   /**
+   * Other visible segment layers next to the editable overlay. Unchanged refs keep their
+   * actor; a colour change only rebuilds the (tiny) transfer functions.
+   */
+  setExtraOverlays(list: { ref: string; data: Voxels; g: LevelGeometry; colors: Record<number, string> }[]): void {
+    const ren = this.grw.getRenderer();
+    const want = new Set(list.map((e) => e.ref));
+    for (const [ref, e] of this.extras) {
+      if (want.has(ref)) continue;
+      ren.removeVolume(e.actor);
+      e.mapper.delete();
+      e.actor.delete();
+      this.extras.delete(ref);
+    }
+    for (const { ref, data, g, colors } of list) {
+      let e = this.extras.get(ref);
+      if (!e) {
+        const image = vtkImageData.newInstance();
+        image.setDimensions(g.size[0], g.size[1], g.size[2]);
+        image.setSpacing([...g.spacing]);
+        image.setOrigin([...g.origin]);
+        const d = g.direction;
+        image.setDirection([d[0], d[3], d[6], d[1], d[4], d[7], d[2], d[5], d[8]]);
+        image.getPointData().setScalars(vtkDataArray.newInstance({ name: "l", numberOfComponents: 1, values: data }));
+        const mapper = vtkVolumeMapper.newInstance();
+        mapper.setInputData(image);
+        mapper.setSampleDistance(Math.min(...g.spacing) * 0.7);
+        mapper.setAutoAdjustSampleDistances(true);
+        mapper.setInteractionSampleDistanceFactor(2.5);
+        const actor = vtkVolume.newInstance();
+        actor.setMapper(mapper);
+        ren.addVolume(actor);
+        e = { actor, mapper };
+        this.extras.set(ref, e);
+      }
+      const prop = e.actor.getProperty();
+      const ctf = vtkColorTransferFunction.newInstance();
+      const otf = vtkPiecewiseFunction.newInstance();
+      const ids = Object.keys(colors).map(Number).filter((n) => n > 0);
+      otf.addPoint(0, 0);
+      if (ids.length <= 1) {
+        const [r, gg, b] = hex(colors[ids[0] ?? 1] ?? "#7bc47f");
+        ctf.addRGBPoint(0, r, gg, b);
+        ctf.addRGBPoint(1, r, gg, b);
+        otf.addPoint(0.45, 0);
+        otf.addPoint(0.55, 0.9);
+        otf.addPoint(1, 0.9);
+        prop.setInterpolationTypeToLinear();
+      } else {
+        for (const n of ids) {
+          const [r, gg, b] = hex(colors[n]);
+          ctf.addRGBPoint(n, r, gg, b);
+          otf.addPoint(n - 0.5, n === ids[0] ? 0 : 0.9);
+          otf.addPoint(n, 0.9);
+        }
+        prop.setInterpolationTypeToNearest();
+      }
+      prop.setRGBTransferFunction(0, ctf);
+      prop.setScalarOpacity(0, otf);
+      prop.setScalarOpacityUnitDistance(0, Math.min(...g.spacing));
+      prop.setShade(true);
+      prop.setAmbient(0.3);
+      prop.setDiffuse(0.75);
+      prop.setSpecular(0.25);
+    }
+    this.setGhost(this.ovAdded || this.extras.size || this.meshes.size ? 0.18 : 1);
+    this.requestRender();
+  }
+
+  /**
    * Surfaces to show (replaces the previous set; unchanged refs keep their GPU buffers).
    * Opaque by default; with opacity < 1 the background ghost shows through.
    */
@@ -392,7 +465,7 @@ export class VolumeRenderer3D {
       prop.setColor(...hex(color));
       prop.setOpacity(opacity);
     }
-    this.setGhost(this.ovAdded || this.meshes.size ? 0.18 : 1);
+    this.setGhost(this.ovAdded || this.extras.size || this.meshes.size ? 0.18 : 1);
     ren.resetCameraClippingRange();
     if (!this.hasData && this.meshes.size) {
       this.hasData = true; // a mesh without any volume still renders
@@ -644,6 +717,77 @@ export class VolumeRenderer3D {
       img.src = url;
     });
     return img;
+  }
+
+  /**
+   * World-space sphere around what the user is looking at: the segment (its non-zero voxels)
+   * or, failing that, the shown meshes. null = nothing but the volume.
+   */
+  structureBounds(): { center: Vec3; radius: number } | null {
+    const box = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+    const grow = (p: Vec3) => {
+      for (let n = 0; n < 3; n++) {
+        box[2 * n] = Math.min(box[2 * n], p[n]);
+        box[2 * n + 1] = Math.max(box[2 * n + 1], p[n]);
+      }
+    };
+    if (this.ov) {
+      const { data, g } = this.ov;
+      const [nx, ny, nz] = g.size;
+      let lo = [nx, ny, nz];
+      let hi = [-1, -1, -1];
+      // one pass; rows are skipped as soon as the first/last hit of the row is known
+      for (let k = 0; k < nz; k++)
+        for (let j = 0; j < ny; j++) {
+          const o = (k * ny + j) * nx;
+          let a = 0;
+          while (a < nx && !data[o + a]) a++;
+          if (a === nx) continue;
+          let b = nx - 1;
+          while (!data[o + b]) b--;
+          if (a < lo[0]) lo[0] = a;
+          if (b > hi[0]) hi[0] = b;
+          if (j < lo[1]) lo[1] = j;
+          if (j > hi[1]) hi[1] = j;
+          if (k < lo[2]) lo[2] = k;
+          if (k > hi[2]) hi[2] = k;
+        }
+      if (hi[0] >= 0) {
+        for (const i of [lo[0] - 0.5, hi[0] + 0.5])
+          for (const j of [lo[1] - 0.5, hi[1] + 0.5])
+            for (const k of [lo[2] - 0.5, hi[2] + 0.5]) grow(ijkToWorld(g, [i, j, k]));
+      }
+    }
+    if (!isFinite(box[0])) for (const { data } of this.meshes.values()) {
+      const b = data.bounds;
+      grow([b[0], b[2], b[4]]);
+      grow([b[1], b[3], b[5]]);
+    }
+    if (!isFinite(box[0])) return null;
+    const center: Vec3 = [(box[0] + box[1]) / 2, (box[2] + box[3]) / 2, (box[4] + box[5]) / 2];
+    return { center, radius: Math.hypot(box[1] - box[0], box[3] - box[2], box[5] - box[4]) / 2 };
+  }
+
+  /**
+   * Centre the camera on a world point (same direction). With `fit` the camera is placed so
+   * that the sphere fills the view (a small segment gets as big as a large one); without, it
+   * frames the volume ~2× closer.
+   */
+  focusOn(p: Vec3, fit?: number): void {
+    const ren = this.grw.getRenderer();
+    const cam = ren.getActiveCamera();
+    const b = this.bg ? this.actor.getBounds() : ren.computeVisiblePropBounds();
+    const radius = fit ? Math.max(fit * 1.25, 2) : Math.hypot(b[1] - b[0], b[3] - b[2], b[5] - b[4]) / 2 || 100;
+    const fp = cam.getFocalPoint();
+    const pos = cam.getPosition();
+    const d = [pos[0] - fp[0], pos[1] - fp[1], pos[2] - fp[2]];
+    const len = Math.hypot(d[0], d[1], d[2]) || 1;
+    const dist = radius / Math.sin(((cam.getViewAngle() / 2) * Math.PI) / 180) / (fit ? 1 : 2);
+    cam.setFocalPoint(p[0], p[1], p[2]);
+    cam.setPosition(p[0] + (d[0] / len) * dist, p[1] + (d[1] / len) * dist, p[2] + (d[2] / len) * dist);
+    if (cam.getParallelProjection()) cam.setParallelScale(fit ? radius : radius / 2);
+    ren.resetCameraClippingRange();
+    this.requestRender();
   }
 
   /** Anterior view, head up (LPS: camera on −y looking towards +y, view-up +z). */

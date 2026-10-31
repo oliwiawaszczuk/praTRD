@@ -4,6 +4,8 @@
 
 import { sendJson } from "#lib/core/api.svelte.ts";
 import { waitJob } from "#lib/core/events.svelte.ts";
+import { libraryVolumes } from "#lib/core/library.svelte.ts";
+import { noteImport } from "./folders.svelte.ts";
 import { activeWorkspaceId } from "#lib/core/workspace.svelte.ts";
 import { importMeshes, isMeshPath } from "#lib/core/meshes.svelte.ts";
 import { showError, showInfo } from "#lib/ui/dialogs.svelte.ts";
@@ -85,6 +87,7 @@ export async function importSelected(ids: number[], anonymize: boolean): Promise
   if (!pending || !ids.length) return;
   const { scanId } = pending;
   pending = null;
+  noteImport(libraryVolumes().map((v) => v.id));
   try {
     await sendJson("POST", `/workspaces/${activeWorkspaceId()}/import`, { scanId, ids, anonymize });
   } catch (e) {

@@ -30,7 +30,8 @@
             ["PPM + przeciągnięcie", "Okno / poziom (W/L)"],
             ["Shift + przeciągnięcie, środkowy", "Przesuwanie"],
             ["⌘/Ctrl + kółko", "Zoom"],
-            ["Dwuklik", "Widok na cały obszar"],
+            ["Dwuklik", "Widok na cały obszar (kursor zostaje)"],
+            ["F (nad widokami)", "Wyśrodkuj i przybliż na przecięciu płaszczyzn"],
           ],
         },
         {

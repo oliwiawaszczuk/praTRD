@@ -1,23 +1,22 @@
-// Scene state shared by all viewports of the Scena tab: which volume is shown, the
-// cursor (one LPS point all views are synced to), window/level, 3-D transfer function,
-// layout. Per-volume parts are persisted per workspace (wsGet/wsSet).
+// Scene state shared by all viewports of the Scena tab: the cursor (one LPS point all views
+// are synced to — global, so switching layers never moves the slices), window/level and 3-D
+// transfer function per shown volume, layout. Persisted per workspace (wsGet/wsSet).
 
 import { getSetting } from "#lib/core/appSettings.svelte.ts";
 import type { VolumeEntry, VolumeMeta } from "#lib/core/library.svelte.ts";
 import { wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
-import { centerWorld, type Plane, type Vec3 } from "./geometry.ts";
+import { centerWorld, worldToIjk, type Plane, type Vec3 } from "./geometry.ts";
 import { defaultTf, type TfPresetId, type WL } from "./presets.ts";
 
 export type Layout = "quad" | "main3d" | "single";
 export type ViewId = Plane | "3d";
 
 interface VolumeViewState {
-  cursor: Vec3;
   wl: WL;
   tf: TfPresetId;
 }
 
-let volumeId = $state(wsGet<string>("scena_volume", ""));
+let cursor = $state<Vec3 | null>(wsGet<Vec3 | null>("scena_cursor", null));
 // What the per-view state (cursor, W/L, 3-D preset) is keyed by: "lib:<vid>" or
 // "node:<gid>:<nid>" — a node keeps its view state while its result ref changes.
 let viewKey = $state("");
@@ -28,12 +27,10 @@ let view = $state<VolumeViewState | null>(null);
 let meta = $state.raw<VolumeMeta | null>(null);
 let overlayAlpha = $state(wsGet<number>("scena_ovAlpha", 0.45));
 let overlayOutline = $state(wsGet<boolean>("scena_ovOutline", true));
+let focusTick = $state(0); // F over the views: centre every view on the cursor
 let meshOpacity = $state(wsGet<number>("scena_meshOpacity", 1));
 
 export const scene = {
-  get volumeId() {
-    return volumeId;
-  },
   get layout() {
     return layout;
   },
@@ -44,7 +41,7 @@ export const scene = {
     return single;
   },
   get cursor(): Vec3 | null {
-    return view?.cursor ?? null;
+    return view ? cursor : null;
   },
   get wl(): WL | null {
     return view?.wl ?? null;
@@ -64,10 +61,17 @@ export const scene = {
   get overlayOutline() {
     return overlayOutline;
   },
+  get focusTick() {
+    return focusTick;
+  },
   get meshOpacity() {
     return meshOpacity;
   },
 };
+
+export function requestFocus(): void {
+  focusTick++;
+}
 
 export function setMeshOpacity(o: number): void {
   meshOpacity = o;
@@ -99,11 +103,21 @@ export function bindVolume(v: VolumeEntry, m: VolumeMeta, key: string): void {
     }
     return;
   }
-  const prevCursor = view?.cursor ?? null;
   viewKey = key;
   const saved = wsGet<VolumeViewState | null>(`scena_view_${key}`, null);
-  // a new key keeps the cursor at the same anatomical point (source → result and back)
-  view = saved ?? { cursor: prevCursor ?? centerWorld(m.levels[0]), wl: { ...v.window }, tf: defaultTf(v) };
+  view = saved ? { wl: saved.wl, tf: saved.tf } : { wl: { ...v.window }, tf: defaultTf(v) };
+  // the cursor stays at the same anatomical point; only a point outside the new volume
+  // (another patient, a crop elsewhere) is moved to its centre
+  if (!cursor || !inside(m, cursor)) {
+    cursor = centerWorld(m.levels[0]);
+    wsSet("scena_cursor", cursor);
+  }
+}
+
+function inside(m: VolumeMeta, w: Vec3): boolean {
+  const g = m.levels[0];
+  const ijk = worldToIjk(g, w);
+  return ijk.every((c, a) => c >= -0.5 && c <= g.size[a] - 0.5);
 }
 
 /** A window that shows something of a volume with these stats. */
@@ -112,15 +126,10 @@ function windowFits(wl: WL, st: VolumeMeta["stats"]): boolean {
   return wl.width <= 20 * range && wl.center > st.min - wl.width && wl.center < st.max + wl.width;
 }
 
-export function selectVolume(id: string): void {
-  volumeId = id;
-  wsSet("scena_volume", id);
-}
-
 export function setCursor(c: Vec3): void {
   if (!view) return;
-  view.cursor = c;
-  persist();
+  cursor = c;
+  wsSet("scena_cursor", c);
 }
 
 export function setWL(wl: WL): void {

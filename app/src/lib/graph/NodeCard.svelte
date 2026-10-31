@@ -30,6 +30,7 @@
     progress,
     selected,
     displayed,
+    active = false,
     onheaderdown,
     onportdown,
     oneye,
@@ -41,6 +42,7 @@
     progress: number | null;
     selected: boolean;
     displayed: boolean;
+    active?: boolean;
     onheaderdown: (e: PointerEvent) => void;
     onportdown: (e: PointerEvent, side: "in" | "out", socket: string) => void;
     oneye: () => void;
@@ -88,6 +90,7 @@
   class:busy={runState === "computing"}
   class:selected
   class:displayed
+  class:active
   style:transform="translate({node.x}px, {node.y}px)"
   style:width="{NODE_W}px"
   style:--dom={DOMAIN_COLOR[type.domain] ?? "var(--accent)"}
@@ -115,7 +118,7 @@
       <button
         class="eye"
         class:on={displayed}
-        title={displayed ? "Wyświetlany w viewportach" : "Pokaż w viewportach"}
+        title={displayed ? "Warstwa sceny — kliknij, by usunąć" : "Dodaj jako warstwę sceny"}
         onpointerdown={(e) => e.stopPropagation()}
         onclick={oneye}
       >
@@ -287,9 +290,12 @@ Kliknij: dokumentacja"
     padding-bottom: 4px;
     font-size: var(--fs-xs);
   }
+  /* on the scene: accent stripe on the header (+ a lit eye); selection is a thin border only */
+  .node.displayed header {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
   .node.selected {
     border-color: var(--accent-a70);
-    box-shadow: 0 0 0 1px var(--accent-a40), 0 6px 18px rgba(0, 0, 0, 0.35);
     z-index: 2;
   }
   header {
@@ -355,6 +361,11 @@ Kliknij: dokumentacja"
   }
   .eye.on {
     color: var(--accent);
+  }
+  /* the layer tools act on (only meaningful with several layers) */
+  .node.active .eye.on {
+    background: var(--accent-a20, var(--accent-a10));
+    border-radius: 4px;
   }
   .info {
     display: flex;

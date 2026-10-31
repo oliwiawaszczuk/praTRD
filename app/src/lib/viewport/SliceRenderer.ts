@@ -55,6 +55,7 @@ uniform ivec2 uLabSize;
 uniform bool uHasLab;
 uniform float uLabAlpha;
 uniform bool uOutline;
+uniform bool uBgOn;       // false: a blended pass of ONE overlay (no background)
 // pending brush strokes on the overlay grid: 0 keep, 1 add (label 1), 2 erase
 uniform highp usampler2D uEdit;
 uniform bool uHasEdit;
@@ -78,7 +79,24 @@ uint labelAt(vec2 frag) {
   return l;
 }
 
+vec4 overlayColor(uint l) {
+  vec3 c = texelFetch(uLut, ivec2(int(l), 0), 0).rgb;
+  float a = uLabAlpha;
+  if (uOutline) {
+    // screen-space edge: a neighbour pixel with another label → strong colour
+    bool edge = labelAt(gl_FragCoord.xy + vec2(1.0, 0.0)) != l || labelAt(gl_FragCoord.xy - vec2(1.0, 0.0)) != l
+             || labelAt(gl_FragCoord.xy + vec2(0.0, 1.0)) != l || labelAt(gl_FragCoord.xy - vec2(0.0, 1.0)) != l;
+    if (edge) a = 0.95;
+  }
+  return vec4(c, a);
+}
+
 void main() {
+  if (!uBgOn) {
+    uint l0 = labelAt(gl_FragCoord.xy);
+    outColor = l0 > 0u ? overlayColor(l0) : vec4(0.0);
+    return;
+  }
   vec2 t = (uFragToTex * vec3(gl_FragCoord.xy, 1.0)).xy;
   if (t.x < 0.0 || t.y < 0.0 || t.x > float(uSize.x) || t.y > float(uSize.y)) {
     outColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -100,15 +118,8 @@ void main() {
   if (uHasLab) {
     uint l = labelAt(gl_FragCoord.xy);
     if (l > 0u) {
-      vec3 c = texelFetch(uLut, ivec2(int(l), 0), 0).rgb;
-      float a = uLabAlpha;
-      if (uOutline) {
-        // screen-space edge: a neighbour pixel with another label → strong colour
-        bool edge = labelAt(gl_FragCoord.xy + vec2(1.0, 0.0)) != l || labelAt(gl_FragCoord.xy - vec2(1.0, 0.0)) != l
-                 || labelAt(gl_FragCoord.xy + vec2(0.0, 1.0)) != l || labelAt(gl_FragCoord.xy - vec2(0.0, 1.0)) != l;
-        if (edge) a = 0.95;
-      }
-      col = mix(col, c, a);
+      vec4 oc = overlayColor(l);
+      col = mix(col, oc.rgb, oc.a);
     }
   }
   outColor = vec4(col, 1.0);
@@ -121,10 +132,12 @@ interface Prog {
 
 const UNIFORMS = [
   "uTex", "uFragToTex", "uWL", "uSize", "uSmooth", "uLab", "uLut", "uFragToLab", "uLabSize",
-  "uHasLab", "uLabAlpha", "uOutline", "uThr", "uThrColor", "uEdit", "uHasEdit",
+  "uHasLab", "uLabAlpha", "uOutline", "uBgOn", "uThr", "uThrColor", "uEdit", "uHasEdit",
 ];
 
 export interface OverlayParams {
+  /** renderer slot of the label slice (0 = the editable one) */
+  slot: number;
   /** Row-major 3×3: device pixel (y down) → overlay texel coords. */
   screenToTex: number[];
   alpha: number;
@@ -137,7 +150,8 @@ export interface DrawParams {
   center: number;
   width: number;
   smooth: boolean;
-  overlay?: OverlayParams | null;
+  /** drawn bottom → top, each over the previous (alpha-blended passes) */
+  overlays?: OverlayParams[];
   threshold?: { lo: number; hi: number; color: [number, number, number] } | null;
 }
 
@@ -147,19 +161,24 @@ function fragMatrix(m: number[], H: number): number[] {
   return [r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]];
 }
 
+/** One label overlay: its slice, pending-stroke mask and colour table. */
+interface Slot {
+  lab: WebGLTexture | null;
+  labSize: [number, number];
+  edit: WebGLTexture | null; // same size as `lab`
+  hasEdit: boolean;
+  lut: WebGLTexture;
+}
+
 export class SliceRenderer {
   private gl: WebGL2RenderingContext;
   private progs = new Map<Kind, Prog>();
   private tex: WebGLTexture | null = null;
-  private lab: WebGLTexture | null = null;
-  private edit: WebGLTexture | null = null; // same size as `lab`
-  private hasEdit = false;
-  private lut: WebGLTexture;
+  private slots: Slot[] = [];
   private noLab: WebGLTexture; // 1×1 R8UI bound when there is no overlay (sampler must match)
   private vao: WebGLVertexArrayObject | null;
   private kind: Kind = "i";
   private size: [number, number] = [0, 0];
-  private labSize: [number, number] = [0, 0];
   private lost = false;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -174,11 +193,6 @@ export class SliceRenderer {
     if (!gl) throw new Error("WebGL2 niedostępne");
     this.gl = gl;
     this.vao = gl.createVertexArray();
-    this.lut = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, this.lut);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 256, 1);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     this.noLab = this.texture(null, gl.R8UI, 1, 1);
     canvas.addEventListener("webglcontextlost", (e) => {
       e.preventDefault();
@@ -238,24 +252,39 @@ export class SliceRenderer {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, s.cols, s.rows, f.format, f.type, s.data);
   }
 
-  /** Label slice (uint8). null removes the overlay. */
-  uploadLabels(s: Slice | null): void {
+  private slot(n: number): Slot {
+    let sl = this.slots[n];
+    if (sl) return sl;
+    const gl = this.gl;
+    const lut = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, 256, 1);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    sl = { lab: null, labSize: [0, 0], edit: null, hasEdit: false, lut };
+    this.slots[n] = sl;
+    return sl;
+  }
+
+  /** Label slice (uint8) into a slot. null removes the overlay. */
+  uploadLabels(s: Slice | null, n = 0): void {
     if (this.lost) return;
     const gl = this.gl;
+    const sl = this.slot(n);
     if (!s) {
-      if (this.lab) gl.deleteTexture(this.lab);
-      this.lab = null;
-      this.hasEdit = false;
+      if (sl.lab) gl.deleteTexture(sl.lab);
+      sl.lab = null;
+      sl.hasEdit = false;
       return;
     }
     const data = s.data instanceof Uint8Array ? s.data : Uint8Array.from(s.data as ArrayLike<number>);
-    if (!this.lab || this.labSize[0] !== s.cols || this.labSize[1] !== s.rows) {
-      this.lab = this.texture(this.lab, gl.R8UI, s.cols, s.rows);
-      this.labSize = [s.cols, s.rows];
-      if (this.edit) gl.deleteTexture(this.edit);
-      this.edit = null;
-      this.hasEdit = false;
-    } else gl.bindTexture(gl.TEXTURE_2D, this.lab);
+    if (!sl.lab || sl.labSize[0] !== s.cols || sl.labSize[1] !== s.rows) {
+      sl.lab = this.texture(sl.lab, gl.R8UI, s.cols, s.rows);
+      sl.labSize = [s.cols, s.rows];
+      if (sl.edit) gl.deleteTexture(sl.edit);
+      sl.edit = null;
+      sl.hasEdit = false;
+    } else gl.bindTexture(gl.TEXTURE_2D, sl.lab);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, s.cols, s.rows, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
   }
@@ -264,30 +293,31 @@ export class SliceRenderer {
   uploadEdit(data: Uint8Array | null): void {
     if (this.lost) return;
     const gl = this.gl;
-    const [w, h] = this.labSize;
-    if (!data || !this.lab || data.length !== w * h) {
-      this.hasEdit = false;
+    const sl = this.slot(0);
+    const [w, h] = sl.labSize;
+    if (!data || !sl.lab || data.length !== w * h) {
+      sl.hasEdit = false;
       return;
     }
-    if (!this.edit) this.edit = this.texture(null, gl.R8UI, w, h);
-    else gl.bindTexture(gl.TEXTURE_2D, this.edit);
+    if (!sl.edit) sl.edit = this.texture(null, gl.R8UI, w, h);
+    else gl.bindTexture(gl.TEXTURE_2D, sl.edit);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
-    this.hasEdit = true;
+    sl.hasEdit = true;
   }
 
   /** colors[n] = "#rrggbb" for label n (n ≥ 1). */
-  setLut(colors: Record<number, string>): void {
+  setLut(colors: Record<number, string>, n = 0): void {
     if (this.lost) return;
     const gl = this.gl;
     const px = new Uint8Array(256 * 4);
     for (const [k, hex] of Object.entries(colors)) {
-      const n = Number(k);
-      if (n < 1 || n > 255) continue;
+      const l = Number(k);
+      if (l < 1 || l > 255) continue;
       const v = parseInt(hex.slice(1), 16);
-      px.set([(v >> 16) & 255, (v >> 8) & 255, v & 255, 255], n * 4);
+      px.set([(v >> 16) & 255, (v >> 8) & 255, v & 255, 255], l * 4);
     }
-    gl.bindTexture(gl.TEXTURE_2D, this.lut);
+    gl.bindTexture(gl.TEXTURE_2D, this.slot(n).lut);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   }
 
@@ -313,28 +343,46 @@ export class SliceRenderer {
     gl.uniform2i(u.uSize, this.size[0], this.size[1]);
     gl.uniform1i(u.uSmooth, p.smooth ? 1 : 0);
 
-    const ov = p.overlay && this.lab ? p.overlay : null;
-    gl.uniform1i(u.uHasLab, ov ? 1 : 0);
+    // pass 0: the background (+ live threshold); overlays follow as blended passes
+    gl.disable(gl.BLEND);
+    gl.uniform1i(u.uBgOn, 1);
+    gl.uniform1i(u.uHasLab, 0);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.lab ?? this.noLab);
+    gl.bindTexture(gl.TEXTURE_2D, this.noLab);
     gl.uniform1i(u.uLab, 1);
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.lut);
+    gl.bindTexture(gl.TEXTURE_2D, this.slot(0).lut);
     gl.uniform1i(u.uLut, 2);
     gl.activeTexture(gl.TEXTURE3);
-    gl.bindTexture(gl.TEXTURE_2D, this.hasEdit && this.edit ? this.edit : this.noLab);
+    gl.bindTexture(gl.TEXTURE_2D, this.noLab);
     gl.uniform1i(u.uEdit, 3);
-    gl.uniform1i(u.uHasEdit, ov && this.hasEdit ? 1 : 0);
-    if (ov) {
-      gl.uniformMatrix3fv(u.uFragToLab, false, fragMatrix(ov.screenToTex, H));
-      gl.uniform2i(u.uLabSize, this.labSize[0], this.labSize[1]);
-      gl.uniform1f(u.uLabAlpha, ov.alpha);
-      gl.uniform1i(u.uOutline, ov.outline ? 1 : 0);
-    }
+    gl.uniform1i(u.uHasEdit, 0);
     const th = p.threshold;
     gl.uniform3f(u.uThr, th?.lo ?? 0, th?.hi ?? 0, th ? 1 : 0);
     gl.uniform3f(u.uThrColor, ...(th?.color ?? [0, 0, 0]));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    const passes = (p.overlays ?? []).filter((o) => this.slots[o.slot]?.lab);
+    if (!passes.length) return;
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.uniform1i(u.uBgOn, 0);
+    for (const o of passes) {
+      const sl = this.slots[o.slot];
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, sl.lab);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, sl.lut);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, sl.hasEdit && sl.edit ? sl.edit : this.noLab);
+      gl.uniform1i(u.uHasEdit, sl.hasEdit ? 1 : 0);
+      gl.uniformMatrix3fv(u.uFragToLab, false, fragMatrix(o.screenToTex, H));
+      gl.uniform2i(u.uLabSize, sl.labSize[0], sl.labSize[1]);
+      gl.uniform1f(u.uLabAlpha, o.alpha);
+      gl.uniform1i(u.uOutline, o.outline ? 1 : 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.disable(gl.BLEND);
   }
 
   clear(): void {
@@ -348,9 +396,12 @@ export class SliceRenderer {
   dispose(): void {
     const gl = this.gl;
     if (this.tex) gl.deleteTexture(this.tex);
-    if (this.lab) gl.deleteTexture(this.lab);
-    if (this.edit) gl.deleteTexture(this.edit);
-    gl.deleteTexture(this.lut);
+    for (const sl of this.slots) {
+      if (!sl) continue;
+      if (sl.lab) gl.deleteTexture(sl.lab);
+      if (sl.edit) gl.deleteTexture(sl.edit);
+      gl.deleteTexture(sl.lut);
+    }
     gl.deleteTexture(this.noLab);
     for (const p of this.progs.values()) gl.deleteProgram(p.prog);
     gl.deleteVertexArray(this.vao);

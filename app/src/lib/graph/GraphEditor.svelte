@@ -28,7 +28,7 @@
     removeEdge,
     select,
     serializeSelection,
-    setDisplay,
+    toggleLayer,
     setView,
     toggleSelect,
     undo,
@@ -362,8 +362,6 @@
     host!.focus();
   }
 
-  let paletteOpen = $state(wsGet<boolean>("graph_paletteOpen", true));
-  $effect(() => wsSet("graph_paletteOpen", paletteOpen));
 
   // ── edges ─────────────────────────────────────────────────────────────────────
   const edgePaths = $derived(
@@ -395,7 +393,7 @@
 <svelte:window oncopy={onCopy} oncut={onCut} onpaste={onPaste} />
 
 <div class="editor">
-  <Palette bind:open={paletteOpen} ondrop={paletteDrop} />
+  <Palette ondrop={paletteDrop} />
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_static_element_interactions -->
   <div
     class="canvas"
@@ -443,10 +441,11 @@
             quality={r?.quality ?? null}
             progress={r?.state === "computing" ? jobProgress(r.quality) : null}
             selected={graph.selection.has(n.id)}
-            displayed={graph.doc.display === n.id}
+            displayed={(graph.doc.layers ?? []).some((l) => l.node === n.id)}
+            active={graph.doc.display === n.id}
             onheaderdown={(e) => onHeaderDown(e, n.id)}
             onportdown={(e, side, s) => onPortDown(e, n.id, side, s)}
-            oneye={() => setDisplay(graph.doc.display === n.id ? null : n.id)}
+            oneye={() => toggleLayer(n.id)}
           />
         {/if}
       {/each}

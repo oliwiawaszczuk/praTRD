@@ -27,6 +27,20 @@
 
   let host = $state<HTMLDivElement>();
   let r = $state.raw<VolumeRenderer3D | null>(null);
+  // F: centre on the slice intersection (skip the initial value — not a key press)
+  let focusSeen = scene.focusTick;
+  $effect(() => {
+    const t = scene.focusTick;
+    if (t === focusSeen) return;
+    focusSeen = t;
+    // a segment / mesh in view: frame IT (however small); otherwise the slice cursor
+    const st = r?.structureBounds();
+    if (r && st) r.focusOn(st.center, st.radius);
+    else {
+      const c = untrack(() => scene.cursor);
+      if (r && c) r.focusOn(c);
+    }
+  });
   let progress = $state<number | null>(null);
   // captured at load time — never index the CURRENT meta with a level of a previous volume
   let shownLevel = $state<{ level: number; size: [number, number, number] } | null>(null);
@@ -121,6 +135,35 @@
       .finally(() => {
         if (!ctl.signal.aborted) ovLoading = false;
       });
+    return () => ctl.abort();
+  });
+
+  // Other visible segment layers: display only, each fetched once per ref.
+  $effect(() => {
+    const list = layers.extras;
+    const rr = r;
+    if (!rr) return;
+    if (!list.length) {
+      rr.setExtraOverlays([]);
+      return;
+    }
+    const ctl = new AbortController();
+    Promise.all(
+      list.map(async (o) => {
+        let L = o.meta.levels.length - 1;
+        for (let n = 0; n < o.meta.levels.length; n++) {
+          const sz = o.meta.levels[n].size;
+          if (sz[0] * sz[1] * sz[2] <= 64_000_000) {
+            L = n;
+            break;
+          }
+        }
+        const d = await fetchLevel(volumePath(o.ref), L, () => {}, ctl.signal);
+        return { ref: o.ref, data: d.data, g: o.meta.levels[L], colors: o.colors };
+      }),
+    )
+      .then((ex) => !ctl.signal.aborted && rr.setExtraOverlays(ex))
+      .catch(() => {});
     return () => ctl.abort();
   });
 

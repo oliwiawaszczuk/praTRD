@@ -13,6 +13,7 @@ export interface OverlaySpec {
   full?: boolean; // from a full-resolution run (not a preview)
   key?: string; // what is displayed ("node:<gid>:<nid>")
   strokes?: number; // edit node: strokes contained in this result
+  node?: string; // graph node this label layer comes from
 }
 
 /** A surface shown in every view: shaded in 3-D, its cut with the slice plane in 2-D. */
@@ -56,9 +57,12 @@ export interface ViewProj {
 }
 
 export interface SliceLayers {
+  /** the editable overlay (active / topmost segment layer) */
   overlay: OverlaySpec | null;
+  /** the other visible segment layers, bottom → top — shown together with `overlay` */
+  extras: OverlaySpec[];
   /** live threshold preview straight from background values (while a slider moves) */
-  threshold: { lo: number; hi: number; color: string } | null;
+  threshold: { lo: number; hi: number; color: string; node?: string } | null;
   alpha: number;
   outline: boolean;
   tool: SegTool | null;
@@ -86,6 +90,7 @@ export interface SliceLayers {
 
 export const NO_LAYERS: SliceLayers = {
   overlay: null,
+  extras: [],
   threshold: null,
   alpha: 0.45,
   outline: true,

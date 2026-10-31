@@ -1,13 +1,15 @@
 <script lang="ts">
   // Scene sidebar — visual first: thumbnails, layout icons, the window drawn on the
   // histogram, colour swatches for 3-D presets. Explanations live in tooltips.
-  import { libraryVolumes, thumbUrl, type VolumeEntry } from "#lib/core/library.svelte.ts";
+  import type { VolumeEntry } from "#lib/core/library.svelte.ts";
   import { num } from "#lib/ui/format.ts";
-  import { graph, setDisplay } from "#lib/graph/store.svelte.ts";
+  import { graph, moveLayer, nodeById, select, setDisplay, setLayerColor, setLayerHidden, toggleLayer } from "#lib/graph/store.svelte.ts";
+  import { bestRun } from "#lib/graph/evaluation.svelte.ts";
+  import { PORT_COLORS, type PortKind } from "#lib/graph/types.ts";
+  import ProgressRing from "#lib/ui/ProgressRing.svelte";
   import { autoWindow, buildTf, CT_WINDOWS, tfPresetsFor, type TfPresetId } from "#lib/viewport/presets.ts";
   import {
     scene,
-    selectVolume,
     setLayout,
     setSingle,
     setTf,
@@ -26,10 +28,64 @@
 
   let {
     vol,
-    displayLabel,
+    roles,
     hasOverlay = false,
     hasMesh = false,
-  }: { vol: VolumeEntry | undefined; displayLabel: string; hasOverlay?: boolean; hasMesh?: boolean } = $props();
+  }: {
+    vol: VolumeEntry | undefined;
+    roles: { base: string | null; overlay: string | null; extra: string[] };
+    hasOverlay?: boolean;
+    hasMesh?: boolean;
+  } = $props();
+
+  // one row per layer: what it is (colour of its output kind) and what it does on the scene
+  const layerRows = $derived(
+    (graph.doc.layers ?? []).flatMap((l) => {
+      const node = nodeById(l.node);
+      if (!node) return [];
+      const run = bestRun(node.id);
+      const out = run?.outputs ? Object.values(run.outputs).find((v) => v.kind in PORT_COLORS && v.kind !== "tabela") : undefined;
+      const kind = (out?.kind as PortKind | undefined) ?? nodeType(node.type)?.outputs[0]?.kind;
+      const role = l.hidden
+        ? ""
+        : node.id === roles.base
+          ? "tło"
+          : node.id === roles.overlay || roles.extra.includes(node.id)
+            ? "nakładka"
+            : kind === "mesh" && out
+              ? "powierzchnia"
+              : "";
+      return [{
+        id: node.id,
+        label: nodeType(node.type)?.label ?? node.type,
+        color: kind ? PORT_COLORS[kind] : "var(--text-dim-3)",
+        hidden: !!l.hidden,
+        // pickable for a single segment (a multi-label map has a colour per label)
+        pick: kind === "segment" ? (l.color ?? ((out as { info?: { color?: string } } | undefined)?.info?.color) ?? "#7bc47f") : null,
+        role,
+        busy: run?.state === "computing",
+      }];
+    }),
+  );
+
+  // reorder by dragging the grip (Pointer Events; rows have a fixed height)
+  const ROW_H = 36;
+  let drag = $state<{ id: string; from: number; y0: number; dy: number } | null>(null);
+  function onGripDown(e: PointerEvent, id: string, n: number): void {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    drag = { id, from: n, y0: e.clientY, dy: 0 };
+  }
+  function onGripMove(e: PointerEvent): void {
+    if (drag) drag.dy = e.clientY - drag.y0;
+  }
+  function onGripUp(): void {
+    if (!drag) return;
+    const to = drag.from + Math.round(drag.dy / ROW_H);
+    const { id, from } = drag;
+    drag = null;
+    if (to !== from) moveLayer(id, to);
+  }
 
   // results of every measurement node, at a glance (click → full table + CSV)
   const results = $derived(
@@ -41,12 +97,6 @@
     }),
   );
 
-  let picker = $state(false);
-  function pickVolume(id: string): void {
-    picker = false;
-    if (graph.doc.display) setDisplay(null); // a library volume replaces the node output
-    selectVolume(id);
-  }
 
   const LAYOUTS: { id: Layout; title: string; cells: [number, number, number, number, boolean][] }[] = [
     { id: "quad", title: "2 × 2", cells: [[0, 0, 9, 7, false], [10, 0, 9, 7, true], [0, 8, 9, 7, false], [10, 8, 9, 7, false]] },
@@ -107,30 +157,56 @@
 </script>
 
 <div class="panel">
-  <!-- volume -->
-  <section class="vol">
-    <button class="vcard" onclick={() => (picker = !picker)} title="Zmień wyświetlany wolumen">
-      {#if displayLabel}
-        <span class="node-ico">◆</span>
-        <span class="vname"><b>{displayLabel}</b><small>wynik grafu</small></span>
-      {:else if vol}
-        <img src={thumbUrl(vol.id)} alt="" />
-        <span class="vname"><b>{vol.name}</b><small>{vol.modality || vol.source} · {vol.size.join("×")}</small></span>
-      {:else}
-        <span class="vname"><small>brak wolumenu</small></span>
-      {/if}
-      <span class="caret">▾</span>
-    </button>
-    {#if picker}
-      <div class="vlist">
-        {#each libraryVolumes() as v (v.id)}
-          <button class="vrow" class:active={!displayLabel && v.id === vol?.id} onclick={() => pickVolume(v.id)}>
-            <img src={thumbUrl(v.id)} alt="" loading="lazy" />
-            <span class="vname"><b>{v.name}</b><small>{v.modality || v.source}</small></span>
-          </button>
-        {/each}
+  <!-- layers: nodes with the eye on (top first); drag ⋮⋮ to reorder -->
+  <section class="layers">
+    <div class="lh"><Icon name="layers" size={13} />Warstwy</div>
+    {#each layerRows as r, n (r.id)}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div
+        class="lrow"
+        class:active={layerRows.length > 1 && r.id === graph.doc.display}
+        class:off={r.hidden || !r.role}
+        class:dragging={drag?.id === r.id}
+        style:transform={drag?.id === r.id ? `translateY(${drag.dy}px)` : null}
+        style:--k={r.color}
+        title={r.hidden ? "Ukryta" : r.role ? `${r.role} — kropka: warstwa, którą edytują narzędzia` : "Nieużywana: wyżej jest inna warstwa tego rodzaju"}
+        onclick={() => (setDisplay(r.id), select([r.id]))}
+      >
+        <span class="grip" onpointerdown={(e) => onGripDown(e, r.id, n)} onpointermove={onGripMove} onpointerup={onGripUp} onpointercancel={onGripUp}>⋮⋮</span>
+        {#if r.pick}
+          <input
+            type="color"
+            class="pick"
+            title="Kolor segmentu"
+            value={r.pick}
+            onclick={(e) => e.stopPropagation()}
+            onchange={(e) => setLayerColor(r.id, e.currentTarget.value)}
+          />
+        {/if}
+        <span class="kind" class:tools={layerRows.length > 1 && r.id === graph.doc.display}></span>
+        <span class="lname"><b>{r.label}</b>{#if r.role}<small>{r.role}</small>{/if}</span>
+        {#if r.busy}<ProgressRing size={12} />{/if}
+        <button
+          class="lb"
+          class:on={!r.hidden}
+          title={r.hidden ? "Pokaż" : "Ukryj"}
+          onclick={(e) => (e.stopPropagation(), setLayerHidden(r.id, !r.hidden))}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" />
+            {#if r.hidden}<path d="M3 3l18 18" />{/if}
+          </svg>
+        </button>
+        <button class="lb" title="Usuń ze sceny" onclick={(e) => (e.stopPropagation(), toggleLayer(r.id))}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
       </div>
-    {/if}
+    {:else}
+      <div class="lempty">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+        oczko na karcie w grafie
+      </div>
+    {/each}
   </section>
 
   <!-- layout -->
@@ -193,38 +269,44 @@
 
     {#if hasOverlay}
       <section class="ovs" title="Wygląd segmentu w widokach 2D">
-        <button
-          class="ico ovb"
-          class:active={scene.overlayOutline}
-          title="Kontur"
-          onclick={() => setOverlayStyle(scene.overlayAlpha, !scene.overlayOutline)}
-        >
-          <svg width="22" height="18" viewBox="0 0 22 18"><ellipse cx="11" cy="9" rx="8" ry="6" fill="none" stroke="currentColor" stroke-width="2" /></svg>
-        </button>
-        <svg class="fillico" width="18" height="18" viewBox="0 0 18 18"><ellipse cx="9" cy="9" rx="7" ry="5.5" fill="var(--port-segment)" opacity={scene.overlayAlpha + 0.15} /></svg>
-        <input
-          type="range"
-          min="0"
-          max="0.9"
-          step="0.05"
-          value={scene.overlayAlpha}
-          oninput={(e) => setOverlayStyle(Number(e.currentTarget.value), scene.overlayOutline)}
-        />
+        <div class="ovh"><i style:background="var(--port-segment)"></i>Segment w 2D<b>{Math.round(scene.overlayAlpha * 100)}%</b></div>
+        <div class="ovr">
+          <button
+            class="ico ovb"
+            class:active={scene.overlayOutline}
+            title="Kontur segmentu: {scene.overlayOutline ? 'włączony' : 'wyłączony'}"
+            onclick={() => setOverlayStyle(scene.overlayAlpha, !scene.overlayOutline)}
+          >
+            <svg width="22" height="18" viewBox="0 0 22 18"><ellipse cx="11" cy="9" rx="8" ry="6" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="0.9"
+            step="0.05"
+            title="Krycie wypełnienia"
+            value={scene.overlayAlpha}
+            oninput={(e) => setOverlayStyle(Number(e.currentTarget.value), scene.overlayOutline)}
+          />
+        </div>
       </section>
     {/if}
 
     {#if hasMesh}
       <section class="ovs" title="Krycie mesha w widoku 3D (w 2D: kontur przekroju)">
-        <span class="ico ovb mico"><Icon name="mesh" size={16} /></span>
-        <svg class="fillico" width="18" height="18" viewBox="0 0 18 18"><path d="M2 15L6.5 4l4.5 11zM6.5 4h9l-4.5 11" fill="var(--port-mesh)" opacity={scene.meshOpacity * 0.85 + 0.1} /></svg>
-        <input
-          type="range"
-          min="0.1"
-          max="1"
-          step="0.05"
-          value={scene.meshOpacity}
-          oninput={(e) => setMeshOpacity(Number(e.currentTarget.value))}
-        />
+        <div class="ovh"><i style:background="var(--port-mesh)"></i>Mesh w 3D<b>{Math.round(scene.meshOpacity * 100)}%</b></div>
+        <div class="ovr">
+          <span class="ico ovb mico"><Icon name="mesh" size={16} /></span>
+          <input
+            type="range"
+            min="0.1"
+            max="1"
+            step="0.05"
+            title="Krycie powierzchni"
+            value={scene.meshOpacity}
+            oninput={(e) => setMeshOpacity(Number(e.currentTarget.value))}
+          />
+        </div>
       </section>
     {/if}
 
@@ -278,9 +360,6 @@
     flex-direction: column;
     gap: 7px;
   }
-  .vol {
-    position: relative;
-  }
   .rcard {
     display: flex;
     flex-direction: column;
@@ -318,50 +397,84 @@
   .kv b {
     color: var(--text);
   }
-  .vcard,
-  .vrow {
-    width: 100%;
+  .lh {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 6px;
-    text-align: left;
+    gap: 6px;
+    font-size: var(--fs-xs);
+    color: var(--text-dim-2);
+  }
+  .layers {
+    gap: 3px;
+  }
+  .lrow {
+    height: 33px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px 0 2px;
     background: var(--bg-deep);
     border: 1px solid var(--line-1);
+    border-left: 3px solid var(--k);
     border-radius: var(--radius-sm);
     cursor: pointer;
   }
-  .vcard:hover,
-  .vrow:hover {
+  .lrow:hover {
     border-color: var(--line-3);
+    border-left-color: var(--k);
   }
-  img {
-    width: 40px;
-    height: 40px;
-    object-fit: contain;
-    background: #000;
-    border-radius: 4px;
+  /* the layer the tools edit: only a ring on its dot — visibility is the eye's job */
+  .lrow.off .lname {
+    opacity: 0.45;
+  }
+  .lrow.dragging {
+    position: relative;
+    z-index: 5;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  }
+  .grip {
+    padding: 0 3px;
+    font-size: 0.6rem;
+    letter-spacing: -2px;
+    color: var(--text-dim-4);
+    cursor: grab;
+    touch-action: none;
+  }
+  .kind {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--k);
     flex-shrink: 0;
   }
-  .node-ico {
-    width: 40px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1rem;
-    color: var(--accent);
-    background: var(--accent-a10);
-    border-radius: 4px;
+  .pick {
+    order: 5;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--line-3);
+    border-radius: 50%;
+    background: none;
+    cursor: pointer;
   }
-  .vname {
+  .pick::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  .pick::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+  }
+  .kind.tools {
+    box-shadow: 0 0 0 2px var(--bg-deep), 0 0 0 3.5px var(--accent);
+  }
+  .lname {
     flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    line-height: 1.15;
   }
-  .vname b {
+  .lname b {
     font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--text);
@@ -369,33 +482,31 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .vname small {
+  .lname small {
     font-size: 0.6rem;
     color: var(--text-dim-3);
   }
-  .caret {
-    font-size: 0.6rem;
-    color: var(--text-dim-3);
-  }
-  .vlist {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    z-index: 30;
-    max-height: 320px;
-    overflow-y: auto;
+  .lb {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 4px;
-    background: var(--bg-panel);
-    border: 1px solid var(--line-2);
-    border-radius: var(--radius-md);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    padding: 3px;
+    background: none;
+    border: none;
+    color: var(--text-dim-4);
+    cursor: pointer;
   }
-  .vrow.active {
-    border-color: var(--accent-a40);
+  .lb:hover,
+  .lb.on {
+    color: var(--text);
+  }
+  .lempty {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+    font-size: var(--fs-xs);
+    color: var(--text-dim-3);
+    border: 1px dashed var(--line-2);
+    border-radius: var(--radius-sm);
   }
   .icons {
     display: flex;
@@ -497,7 +608,27 @@
     color: var(--accent);
   }
   .ovs {
-    flex-direction: row;
+    gap: 5px;
+  }
+  .ovh {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-xs);
+    color: var(--text-dim-2);
+  }
+  .ovh i {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+  .ovh b {
+    margin-left: auto;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .ovr {
+    display: flex;
     align-items: center;
     gap: 8px;
   }

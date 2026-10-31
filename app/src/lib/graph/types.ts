@@ -58,7 +58,16 @@ export interface GraphDoc {
   nodes: GNode[];
   edges: GEdge[];
   view: { x: number; y: number; zoom: number };
-  display?: string | null; // node whose output the viewports show
+  display?: string | null; // active layer: tools, status badge and full-resolution runs follow it
+  layers?: SceneLayer[]; // nodes with the eye on, top first
+}
+
+/** A node shown in the viewports. Background = topmost visible volume, overlay = topmost
+ * visible segment(ation), meshes = every visible mesh. */
+export interface SceneLayer {
+  node: string;
+  hidden?: boolean;
+  color?: string; // display colour of a single segment (overrides the node's own)
 }
 
 export interface GraphMeta {

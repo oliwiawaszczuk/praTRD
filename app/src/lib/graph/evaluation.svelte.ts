@@ -94,6 +94,7 @@ function signature(): string {
     d.nodes.map((n) => [n.id, n.type, n.params]),
     d.edges.map((e) => [e.from, e.fromSocket, e.to, e.toSocket]),
     d.display ?? null,
+    (d.layers ?? []).filter((l) => !l.hidden).map((l) => l.node),
   ]);
 }
 
@@ -106,10 +107,12 @@ async function post(quality: "preview" | "full", targets: string[]): Promise<str
   return r.jobId;
 }
 
-/** Nodes whose results must be exact: the displayed one and every measurement table. */
+/** Nodes whose results must be exact: visible layers and every measurement table. */
 function fullTargets(): string[] {
+  const shown = new Set((graph.doc.layers ?? []).filter((l) => !l.hidden).map((l) => l.node));
+  if (graph.doc.display) shown.add(graph.doc.display);
   const t = graph.doc.nodes
-    .filter((n) => n.id === graph.doc.display || nodeType(n.type)?.outputs.some((o) => o.kind === "tabela"))
+    .filter((n) => shown.has(n.id) || nodeType(n.type)?.outputs.some((o) => o.kind === "tabela"))
     .map((n) => n.id);
   return t;
 }

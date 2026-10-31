@@ -38,16 +38,42 @@ export const TF_LABELS: Record<TfPresetId, string> = {
   generic: "Ogólny (wg histogramu)",
 };
 
-export function tfPresetsFor(v: VolumeEntry): TfPresetId[] {
-  return v.modality === "CT" ? ["ct-angio", "ct-bone", "ct-soft", "mip", "generic"] : ["generic", "mip"];
+/** Calibrated in Hounsfield units: a CT, or any volume whose range looks like one. */
+export const isHU = (v: VolumeEntry): boolean => v.modality === "CT" || (v.stats.min <= -500 && v.stats.max >= 300);
+
+// every preset is always offered: on data that is not in HU (MR, NIfTI without a modality, a
+// filtered map) the CT presets are stretched over the volume's own value range instead
+export function tfPresetsFor(_v: VolumeEntry): TfPresetId[] {
+  return ["generic", "ct-angio", "ct-bone", "ct-soft", "mip"];
 }
 
 export function defaultTf(v: VolumeEntry): TfPresetId {
-  return v.modality === "CT" ? "ct-angio" : "generic";
+  return isHU(v) ? "ct-angio" : "generic";
+}
+
+const HU_LO = -1024;
+const HU_HI = 1500;
+
+/** Map a HU preset onto the volume's own range (p1…p99 ↔ −1024…1500 HU). */
+function stretch(tf: TransferFunction, v: VolumeEntry): TransferFunction {
+  const lo = v.stats.p1;
+  const span = Math.max(1e-9, v.stats.p99 - v.stats.p1);
+  const map = (x: number) => lo + ((Math.min(x, HU_HI) - HU_LO) / (HU_HI - HU_LO)) * span;
+  const top = (x: number) => (x >= 3000 ? v.stats.max : map(x));
+  return {
+    ...tf,
+    opacity: tf.opacity.map(([x, o]) => [x <= HU_LO ? v.stats.min : top(x), o]),
+    color: tf.color.map(([x, r, g, b]) => [top(x), r, g, b]),
+  };
 }
 
 /** Values in HU for CT presets; the generic one follows the volume's percentiles. */
 export function buildTf(id: TfPresetId, v: VolumeEntry, wl: WL): TransferFunction {
+  const tf = buildHuTf(id, v, wl);
+  return id.startsWith("ct-") && !isHU(v) ? stretch(tf, v) : tf;
+}
+
+function buildHuTf(id: TfPresetId, v: VolumeEntry, wl: WL): TransferFunction {
   switch (id) {
     case "ct-bone":
       return {

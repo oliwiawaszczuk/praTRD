@@ -7,8 +7,65 @@
   import ImportDialog from "./ImportDialog.svelte";
   import { isScanning, scanPaths } from "./importFlow.svelte.ts";
   import VolumeDetails from "./VolumeDetails.svelte";
+  import { confirmAction, promptText } from "#lib/ui/dialogs.svelte.ts";
+  import {
+    ALL,
+    LOOSE,
+    addFolder,
+    claimNew,
+    danePanel,
+    folderOf,
+    inFolder,
+    moveToFolder,
+    openFolder,
+    removeFolder,
+    renameFolder,
+  } from "./folders.svelte.ts";
 
-  const volumes = $derived(libraryVolumes());
+  const all = $derived(libraryVolumes());
+  $effect(() => claimNew(all.map((v) => v.id)));
+  const volumes = $derived(all.filter((v) => inFolder(v.id, danePanel.current)));
+  const count = (f: string) => all.filter((v) => inFolder(v.id, f)).length;
+  const folderRows = $derived([
+    { id: ALL, name: "Wszystkie", fixed: true },
+    ...danePanel.folders.map((f) => ({ ...f, fixed: false })),
+    ...(danePanel.folders.length ? [{ id: LOOSE, name: "Bez folderu", fixed: true }] : []),
+  ]);
+
+  async function newFolder(): Promise<void> {
+    const name = (await promptText("Nowy folder", { label: "Nazwa", confirmText: "Utwórz" }))?.trim();
+    if (name) addFolder(name);
+  }
+  async function rename(id: string, name: string): Promise<void> {
+    const n = (await promptText("Zmień nazwę folderu", { value: name, confirmText: "Zapisz" }))?.trim();
+    if (n) renameFolder(id, n);
+  }
+  async function remove(id: string, name: string): Promise<void> {
+    if (await confirmAction(`Usunąć folder „${name}”?`, "Dane zostaną w bibliotece (Bez folderu).", { confirmText: "Usuń", danger: true }))
+      removeFolder(id);
+  }
+
+  // drag a card onto a folder (Pointer Events; a click below 5 px of movement stays a click)
+  let drag = $state<{ id: string; x0: number; y0: number; x: number; y: number; on: boolean; over: string | null } | null>(null);
+  function onCardDown(e: PointerEvent, id: string): void {
+    if (e.button !== 0) return;
+    drag = { id, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, on: false, over: null };
+  }
+  function onWinMove(e: PointerEvent): void {
+    if (!drag) return;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    if (!drag.on && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 5) drag.on = true;
+    if (drag.on) {
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-folder]");
+      drag.over = el?.dataset.folder ?? null;
+    }
+  }
+  function onWinUp(): void {
+    if (drag?.on && drag.over !== null && drag.over !== ALL) moveToFolder(drag.id, drag.over);
+    drag = null;
+  }
+  const dragged = $derived(drag?.on ? all.find((v) => v.id === drag!.id) : undefined);
   let selectedId = $state(wsGet<string>("dane_selectedVolume", ""));
   const selected = $derived(volumes.find((v) => v.id === selectedId) ?? volumes[0]);
 
@@ -19,6 +76,8 @@
 
   const importFrom = async (kind: "folders" | "files") => scanPaths(await pickImportPaths(kind));
 </script>
+
+<svelte:window onpointermove={onWinMove} onpointerup={onWinUp} />
 
 <div class="dane">
   <aside>
@@ -32,17 +91,54 @@
       {#if isScanning()}<span class="scanning">Skanowanie…</span>{/if}
     </div>
 
-    {#if libraryLoaded() && !volumes.length}
+    <div class="folders">
+      {#each folderRows as f (f.id)}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div
+          class="frow"
+          class:active={danePanel.current === f.id}
+          class:drop={drag?.on && drag.over === f.id && f.id !== ALL && folderOf(drag.id) !== f.id}
+          data-folder={f.id}
+          onclick={() => openFolder(f.id)}
+          ondblclick={() => !f.fixed && rename(f.id, f.name)}
+          title={f.fixed ? "" : "Dwuklik: zmień nazwę · przeciągnij tu dane"}
+        >
+          {#if f.id === ALL}
+            <Icon name="layers" size={14} />
+          {:else}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h6l2 2h10v11H3z" /></svg>
+          {/if}
+          <span class="fname">{f.name}</span>
+          <small>{count(f.id)}</small>
+          {#if !f.fixed}
+            <button class="fdel" title="Usuń folder" onclick={(e) => (e.stopPropagation(), remove(f.id, f.name))}>
+              <Icon name="trash" size={12} />
+            </button>
+          {/if}
+        </div>
+      {/each}
+      <button class="frow add" onclick={newFolder} title="Nowy folder"><Icon name="plus" size={14} /><span class="fname">Folder</span></button>
+    </div>
+
+    {#if libraryLoaded() && !all.length}
       <div class="empty">
         <Icon name="cube" size={34} />
         <span>Biblioteka jest pusta</span>
         <small>Wybierz folder z seriami DICOM albo pliki NIfTI / NRRD / MHA (mesh: STL / OBJ / PLY) — możesz też upuścić je na okno.</small>
       </div>
+    {:else if !volumes.length}
+      <div class="fempty">Pusty folder — przeciągnij tu dane albo zaimportuj, gdy jest otwarty.</div>
     {:else}
       <ul>
         {#each volumes as v (v.id)}
           <li>
-            <button class="card" class:active={selected?.id === v.id} onclick={() => select(v.id)}>
+            <button
+              class="card"
+              class:active={selected?.id === v.id}
+              class:ghost={drag?.on && drag.id === v.id}
+              onpointerdown={(e) => onCardDown(e, v.id)}
+              onclick={() => !drag?.on && select(v.id)}
+            >
               <img src={thumbUrl(v.id)} alt="" loading="lazy" decoding="async" />
               <div class="meta">
                 <span class="name">{v.name}</span>
@@ -68,6 +164,12 @@
     {/key}
   {/if}
 </div>
+
+{#if dragged && drag}
+  <div class="dragchip" style:left="{drag.x + 12}px" style:top="{drag.y + 8}px">
+    <img src={thumbUrl(dragged.id)} alt="" />{dragged.name}
+  </div>
+{/if}
 
 <ImportDialog />
 
@@ -119,6 +221,94 @@
   .empty small {
     font-size: var(--fs-xs);
     line-height: 1.6;
+  }
+  .folders {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line-1);
+  }
+  .frow {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    padding: 0 6px;
+    font-size: var(--fs-sm);
+    color: var(--text-dim-2);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+  }
+  .frow:hover {
+    background: var(--bg-deep);
+  }
+  .frow.active {
+    color: var(--accent);
+    background: var(--accent-a10);
+  }
+  .frow.drop {
+    border-color: var(--accent);
+    border-style: dashed;
+  }
+  .frow.add {
+    color: var(--text-dim-4);
+  }
+  .fname {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .frow small {
+    font-size: var(--fs-xs);
+    color: var(--text-dim-4);
+  }
+  .fdel {
+    display: none;
+    padding: 2px;
+    background: none;
+    border: none;
+    color: var(--text-dim-4);
+    cursor: pointer;
+  }
+  .frow:hover .fdel {
+    display: flex;
+  }
+  .fdel:hover {
+    color: var(--danger, var(--text));
+  }
+  .fempty {
+    padding: 14px 6px;
+    font-size: var(--fs-xs);
+    color: var(--text-dim-4);
+    text-align: center;
+  }
+  .card.ghost {
+    opacity: 0.4;
+  }
+  .dragchip {
+    position: fixed;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 4px;
+    font-size: var(--fs-xs);
+    color: var(--text);
+    background: var(--bg-panel);
+    border: 1px solid var(--accent-a40);
+    border-radius: var(--radius-sm);
+    pointer-events: none;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+  }
+  .dragchip img {
+    width: 24px;
+    height: 24px;
   }
   ul {
     list-style: none;

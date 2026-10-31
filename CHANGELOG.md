@@ -2,6 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/), wersje: [SemVer](https://semver.org/).
 
+## [Unreleased] — Scena: warstwy, Dane: foldery
+
+- **Warstwy sceny** zamiast wyboru wolumenu w prawym panelu: oczko na karcie dodaje/usuwa warstwę; w panelu kolejność (przeciąganie ⋮⋮), ukrywanie, aktywna warstwa (klik) i rola (tło / nakładka / powierzchnia). Segmentację można nałożyć na dowolny wolumen z grafu; kilka meshy naraz.
+- Na scenie jest tylko to, co włączono w grafie (pusta scena = podpowiedź). Karty warstw mają akcent na nagłówku, aktywna — pełną ramkę.
+- Przełączanie oczka nie przesuwa przekrojów: kursor jest wspólny dla całej sceny (środek tylko, gdy punkt wypada poza nowy wolumen).
+- Poprawki: `build.sh` instaluje w /Applications; **F w 3D** kadruje segment/mesh (też mały); presety 3D (Naczynia/Kości/Skóra) zawsze dostępne (poza HU rozciągane na zakres wolumenu); nowy node z wynikiem od razu ma oczko; warstwy — aktywna to tylko pierścień na kropce, na karcie cienka ramka zaznaczenia; pasek node'ów stały, zmiana szerokości przeciągnięciem krawędzi; suwaki krycia z podpisem i %.
+- **Dane: foldery** (per workspace) — lista folderów z licznikami, przeciąganie serii na folder, import trafia do otwartego folderu; usunięcie folderu nie usuwa danych.
+
 ## Poprawka — zakładka Ustawienia
 
 - Zakładka Ustawienia padała („Internal Error”, Svelte `each_key_duplicate`): rozmiary cache były liczone przesunięciem bitowym (`20 << 30` w JS = 0, `50 << 30` < 0), więc dwa przyciski miały klucz 0. Teraz mnożenie; „20 GB” zapisywałoby budżet 0, a 5 GB — 1 GB.

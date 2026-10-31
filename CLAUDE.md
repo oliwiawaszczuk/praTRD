@@ -22,7 +22,7 @@ Plan i etapy: `docs/02-plan.md` (zatwierdzony). Decyzje: `docs/01-qa.md`. Postę
 
 ```bash
 ./dev.sh                 # Tauri dev + hot reload; sidecar przez `uv run python -m pratrd`, dane w ./workspaces
-./build.sh               # szybki build .app (sidecar przez uv z tego projektu)
+./build.sh               # szybki build .app (sidecar przez uv) + instalacja w /Applications (--no-install, --install-only)
 ./build.sh --standalone  # jak release: zamrożony sidecar w .app, dane w ~/Library/Application Support/com.praoliwia.praTRD
 ./scripts/build-sidecar.sh   # PyInstaller + smoke test binarki (/diagnostics + prawdziwy import przez pulę)
 
@@ -82,6 +82,10 @@ app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
   gestu, nie przy każdym ruchu), `graph/evaluation.svelte.ts` (sygnatura semantyczna bez pozycji →
   podgląd; bezczynność → pełna), geometria kart w `graph/layout.ts` (porty liczone, nie mierzone —
   zmiana wyglądu karty = zmiana stałych).
+- Scena = warstwy: `graph.doc.layers` (oczko na karcie = `toggleLayer`, góra listy = góra), `display` =
+  aktywna warstwa (narzędzia, status, pełna rozdzielczość). Tło = aktywna/najwyższa widoczna warstwa
+  `wolumen`, nakładka = aktywna/najwyższa `segment(acja)`, meshe = wszystkie widoczne. Biblioteka
+  trafia na scenę tylko przez node. Kursor sceny globalny (`scena_cursor`) — zmiana warstwy nie rusza przekrojów.
 - Stan viewportów kluczowany „co jest wyświetlane” (`lib:<vid>` / `node:<gid>:<nid>`), kadr 2D
   w jednostkach świata — wynik node'a może zmienić geometrię bez skoku obrazu.
 
