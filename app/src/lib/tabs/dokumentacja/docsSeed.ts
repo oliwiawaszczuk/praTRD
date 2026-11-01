@@ -58,6 +58,42 @@ export const TAB_DOCS: TabDoc[] = [
 - **Eksport** STL / OBJ / PLY: strzałka na karcie node'a (współrzędne LPS, jak DICOM i Slicer).`,
   },
   {
+    key: "kreator",
+    title: "Kreator",
+    body: `Własne node'y: karta + kod w Pythonie. Zapisany node jest w palecie Sceny (znaczek *własny*).
+
+## Karta — trzy strefy
+- **Wejścia** (lewa, ikona →▢): dane z innych node'ów, czyli połączenia na grafie. W kodzie: \`inputs.<nazwa>\`.
+- **Wyjścia** (prawa, ▢→): to, co zwraca \`run()\`, łączone dalej. W kodzie: klucz w \`return {"nazwa": …}\`.
+- **Parametry** (dół, kolor turkusowy): suwaki i przełączniki na karcie, bez połączeń. W kodzie: \`params.<klucz>\`.
+- Etykieta (PL) jest dla Ciebie, nazwa pod nią (EN) — dla kodu; klik zmienia. Kolor kropki = rodzaj gniazda, *opc* = może być niepodłączone (\`None\`), *[ ]* = wiele połączeń (lista).
+- Te same kolory są w kodzie: \`inputs.image\` ma kolor gniazda, \`params.low\` turkus; nazwa, której nie ma na karcie, jest podkreślona na czerwono.
+
+## Kod
+\`\`\`python
+def run(inputs, params, ctx):
+    image = inputs.image                      # Volume
+    return image.array > params.threshold    # bool -> segment on the input grid
+\`\`\`
+- **Volume:** \`.array\` (tylko do odczytu), \`.shape\` (k, j, i), \`.spacing\` (i, j, k) mm, \`.spacing_kji\` (dla scipy), \`.origin\`, \`.direction\`, \`.voxel_ml\`, \`.labels\`, \`.to_mm(ijk)\`, \`.to_ijk(xyz)\`. **Mesh:** \`.verts\` (mm), \`.faces\`. Tabela = dict, punkty = lista markupów, liczba = float.
+- **Zwracasz** \`{output: value}\` (albo samą wartość przy jednym wyjściu): tablica o kształcie wejścia → wolumen / segment (bool) / segmentacja, \`(verts, faces)\` → mesh, lista słowników → tabela, liczba, lista \`[x, y, z]\` → punkty.
+- **ctx:** \`ctx.progress(0.5)\` (pasek + anulowanie), \`ctx.preview\`, \`ctx.volume(arr, like=…, grid=…, name=…, window=(c, w), color=…, labels=[…])\`, \`ctx.grid(like, spacing=…, shape=…)\`, \`ctx.table(rows, columns=[(key, label, unit)], chart="bars")\`, \`ctx.mesh(v, f, name=…, color=…)\`.
+- Kod piszemy po angielsku; parametry fizyczne w **mm** — wynik w podglądzie i w pełnej rozdzielczości jest wtedy ten sam.
+
+## Biblioteki
+- Przycisk **Biblioteki** nad kodem: wbudowane (numpy — \`np\` jest od razu, scipy, scikit-image, SimpleITK, nibabel, pydicom, pillow) — klik dopisuje \`import\` na górze kodu.
+- **Dowolna paczka z PyPI:** wpisz nazwę (np. *scikit-learn*, *trimesh*, *opencv-python-headless*) → *Instaluj*. Trafia do folderu danych appki; wbudowane numpy/scipy… zostają w swoich wersjach (konflikt wersji = ostrzeżenie).
+- Brakujący \`import\` w teście → przycisk *Zainstaluj …* i test od nowa.
+
+## Test
+- Wejście z **fantomu** (kula w szumie, woksel 0,8 × 0,8 × 1,5 mm — łapie kod ignorujący spacing), z **serii** albo z **node'a otwartego grafu**.
+- **Kontrole:** składnia, wszystkie wyjścia, NaN/Inf, pusta / pełna maska, stały wolumen, zmiana typu, czas. Własne: \`def test(result, inputs, params): assert …\`.
+- Błąd wskazuje linię w kodzie (klik → skok). \`print()\` i ostrzeżenia numpy trafiają do konsoli.
+
+## Wymiana
+Strzałka przy node'ie = plik *.pratrdnode* (karta + kod); import otwiera go jako szkic — zajęta nazwa = pytanie przy zapisie, nigdy nadpisanie.`,
+  },
+  {
     key: "tablica",
     title: "Tablica",
     body: `Swobodna tablica (jak Miro) — globalna, niezależna od workspace'u.

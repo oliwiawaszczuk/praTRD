@@ -8,7 +8,8 @@
   import ProgressRing from "#lib/ui/ProgressRing.svelte";
   import type { ParamSchema } from "./types.ts";
 
-  let { p, value, onchange }: { p: ParamSchema; value: unknown; onchange: (v: unknown) => void } = $props();
+  // `code`: name of the value in a user node's Python (Kreator), shown under the label
+  let { p, value, onchange, code }: { p: ParamSchema; value: unknown; onchange: (v: unknown) => void; code?: string } = $props();
 
   const num = $derived(Number(value ?? p.default));
   const decimals = $derived(p.type === "int" ? 0 : Math.max(0, -Math.floor(Math.log10(p.step || 0.1))));
@@ -33,7 +34,11 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="field" onpointerdown={stop} onwheel={stop} title={p.help || undefined}>
-  <span class="label">{p.label}</span>
+  {#if code}
+    <span class="label two">{p.label}<small>{code}</small></span>
+  {:else}
+    <span class="label">{p.label}</span>
+  {/if}
   {#if p.type === "number" || p.type === "int"}
     <input
       class="slider"
@@ -100,6 +105,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .label.two {
+    width: 78px;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .label small {
+    font-size: 0.56rem;
+    color: var(--param);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .slider {
     flex: 1;

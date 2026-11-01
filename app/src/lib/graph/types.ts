@@ -36,6 +36,7 @@ export interface NodeTypeSchema {
   cost: "light" | "heavy";
   widget: string; // custom card editor instead of generic params (e.g. "cropbox")
   version: number;
+  custom?: boolean; // made in the Kreator tab (id "wlasne/<slug>")
 }
 
 export interface GNode {

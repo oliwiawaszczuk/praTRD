@@ -8,6 +8,8 @@ from fastapi.responses import JSONResponse
 
 from .. import nodes  # noqa: F401 — registers all node types
 from ..config import Config
+from ..custom import packages
+from ..custom.store import CustomNodeError, CustomNodeStore
 from ..events import EventHub
 from ..graph.store import GraphStore
 from ..jobs import JobManager
@@ -18,6 +20,7 @@ from ..workspaces import WorkspaceError, WorkspaceStore
 from . import (
     app_settings,
     boards,
+    custom_nodes,
     docs,
     graphs,
     jobs,
@@ -60,6 +63,9 @@ def create_app(config: Config) -> FastAPI:
     app.state.meshes = MeshLibrary()
     app.state.scans = volumes.ScanCache()
     app.state.graphs = GraphStore()
+    app.state.custom_nodes = CustomNodeStore(config.custom_nodes_dir)
+    app.state.custom_nodes.load_all()
+    packages.activate(config.root)  # pip-installed libraries for user nodes
 
     # No GZip on purpose: over loopback compression only burns CPU, and binary voxel
     # responses (slices, volumes) are already compact or compressed in the store.
@@ -73,6 +79,10 @@ def create_app(config: Config) -> FastAPI:
 
     @app.exception_handler(WorkspaceError)
     async def _ws_error(_: Request, exc: WorkspaceError) -> JSONResponse:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+
+    @app.exception_handler(CustomNodeError)
+    async def _custom_error(_: Request, exc: CustomNodeError) -> JSONResponse:
         return JSONResponse({"detail": exc.detail}, status_code=exc.status)
 
     @app.exception_handler(LibraryError)
@@ -89,4 +99,5 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(notes.router)
     app.include_router(boards.router)
     app.include_router(docs.router)
+    app.include_router(custom_nodes.router)
     return app

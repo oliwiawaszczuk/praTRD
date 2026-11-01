@@ -265,10 +265,19 @@ class Evaluator:
 
     # ── evaluation ─────────────────────────────────────────────────────────────
     def evaluate(
-        self, job: Job, gid: str, graph: dict[str, Any], targets: list[str], quality: Quality
+        self,
+        job: Job,
+        gid: str,
+        graph: dict[str, Any],
+        targets: list[str],
+        quality: Quality,
+        extra_types: dict[str, NodeType] | None = None,
+        fresh: frozenset[str] = frozenset(),
     ) -> dict[str, Any]:
+        """extra_types: unregistered types (node-creator tests); fresh: nodes that must run
+        even when cached (a test has to show the code's prints and checks)."""
         self.quality = quality
-        nodes, inputs = self._parse(graph)
+        nodes, inputs = self._parse(graph, extra_types or {})
         order = self._order(nodes, inputs, [t for t in targets if t in nodes])
         keys: dict[str, str] = {}
         values: dict[str, dict[str, Any]] = {}
@@ -321,7 +330,7 @@ class Evaluator:
             key = _hash24(json.dumps(key_src, sort_keys=True, default=str))
             keys[nid] = key
 
-            cached = self._lookup(key)
+            cached = None if nid in fresh else self._lookup(key)
             if cached is not None:
                 values[nid] = cached
                 out_json = {s: value_to_json(v) for s, v in cached.items()}
@@ -357,11 +366,12 @@ class Evaluator:
         return results
 
     def _parse(
-        self, graph: dict[str, Any]
+        self, graph: dict[str, Any], extra_types: dict[str, NodeType]
     ) -> tuple[dict[str, NodeSpec], dict[tuple[str, str], list[tuple[str, str]]]]:
         nodes: dict[str, NodeSpec] = {}
         for raw in graph.get("nodes", []):
-            nt = REGISTRY.get(raw.get("type", ""))
+            t = raw.get("type", "")
+            nt = extra_types.get(t) or REGISTRY.get(t)
             if nt is None:
                 continue  # unknown (e.g. from a newer version): treated as absent
             nodes[str(raw["id"])] = NodeSpec(str(raw["id"]), nt, nt.clean_params(raw.get("params")))

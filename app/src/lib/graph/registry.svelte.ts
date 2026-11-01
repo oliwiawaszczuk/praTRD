@@ -1,6 +1,7 @@
 // Node types from the sidecar — the frontend has no hard-coded node definitions.
 
 import { getJson } from "#lib/core/api.svelte.ts";
+import { onEvent } from "#lib/core/events.svelte.ts";
 import type { NodeTypeSchema } from "./types.ts";
 
 let types = $state.raw<NodeTypeSchema[]>([]);
@@ -14,6 +15,11 @@ export async function loadNodeTypes(): Promise<void> {
   domains = s.domains;
   types = s.types;
 }
+
+// user nodes saved / deleted in the Kreator → the sidecar re-registered them
+onEvent("node-types", () => {
+  if (types.length) void loadNodeTypes().catch(() => {});
+});
 
 export const nodeTypes = (): NodeTypeSchema[] => types;
 export const domainLabels = (): Record<string, string> => domains;
@@ -29,4 +35,5 @@ export const DOMAIN_COLOR: Record<string, string> = {
   segmentacja: "#b48ce0",
   pomiary: "#f2994a",
   mesh: "#4db6ac",
+  wlasne: "#ffc951",
 };

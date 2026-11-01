@@ -371,7 +371,11 @@
       const ta = a && nodeType(a.type);
       const tb = b && nodeType(b.type);
       if (!a || !b || !ta || !tb) return [];
-      const kind = ta.outputs.find((p) => p.id === e.fromSocket)?.kind ?? "wolumen";
+      const out = ta.outputs.find((p) => p.id === e.fromSocket);
+      const inp = tb.inputs.find((p) => p.id === e.toSocket);
+      // a socket removed or retyped (Kreator) — the evaluator ignores this edge, so do we
+      if (!out || !inp || out.kind !== inp.kind) return [];
+      const kind = out.kind;
       return [{ id: e.id, d: edgePath(outputPos(a, ta, e.fromSocket), inputPos(b, tb, e.toSocket)), color: PORT_COLORS[kind] }];
     }),
   );
@@ -447,6 +451,20 @@
             onportdown={(e, side, s) => onPortDown(e, n.id, side, s)}
             oneye={() => toggleLayer(n.id)}
           />
+        {:else}
+          <!-- e.g. a Kreator node that was deleted or renamed: kept (edges, params) until removed -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="missing"
+            class:selected={graph.selection.has(n.id)}
+            style:transform="translate({n.x}px, {n.y}px)"
+            style:width="{NODE_W}px"
+            data-node={n.id}
+            onpointerdown={(e) => onHeaderDown(e, n.id)}
+            title="Typ „{n.type}” nie istnieje (np. usunięty w Kreatorze). Zaznacz i usuń klawiszem Delete albo odtwórz node o tym identyfikatorze."
+          >
+            <span>Brak node'a</span><code>{n.type}</code>
+          </div>
         {/if}
       {/each}
     </div>
@@ -543,6 +561,29 @@
     border: 1px solid var(--accent-a70);
     background: var(--accent-a10);
     pointer-events: none;
+  }
+  .missing {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 10px;
+    font-size: var(--fs-xs);
+    color: var(--danger);
+    background: var(--bg-panel);
+    border: 1px dashed var(--danger);
+    border-radius: var(--radius-md);
+    cursor: grab;
+  }
+  .missing.selected {
+    border-style: solid;
+  }
+  .missing code {
+    font-size: 0.6rem;
+    color: var(--text-dim-3);
   }
   .hint {
     position: absolute;

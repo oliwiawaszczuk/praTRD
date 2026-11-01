@@ -6,7 +6,7 @@
 Łączy praSzczur (workspace'y, ustawienia, styl UI, Node Graph), praHand3D (inspiracja) i 3D Slicer (funkcje).
 Plan i etapy: `docs/02-plan.md` (zatwierdzony). Decyzje: `docs/01-qa.md`. Postęp: `CHANGELOG.md`.
 
-**Stan: 0.1.0 gotowe (E0–E7) + E8 Mesh + E9 Filtry. Dalej wg planu: AI segmentacja → rejestracja i fuzja.**
+**Stan: 0.1.0 gotowe (E0–E7) + E8 Mesh + E9 Filtry + Kreator (własne node'y). Dalej wg planu: AI segmentacja → rejestracja i fuzja.**
 
 ## Zasady pracy
 
@@ -61,6 +61,8 @@ app/src/lib/viewport/               geometry.ts (IJK↔LPS, viewBasis: widok ana
                                     SliceView.svelte, VolumeRenderer3D.ts (jedyne miejsce z vtk.js),
                                     View3D.svelte, volumeSource.ts, presets.ts, scene.svelte.ts, ViewportGrid
 app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
+app/src/lib/tabs/kreator/           Kreator (lista, NodeBuilder, ParamEditor, CodeEditor = CodeMirror, TestPanel)
+src/pratrd/custom/                  manifest, runtime (fasada + wykonanie), store, tester (fantom)
 ```
 
 ## Node Graph (KONWENCJE)
@@ -135,6 +137,25 @@ app/src/lib/tabs/scena/             Scena (siatka + miejsce na graf), ScenePanel
   (własne okno z percentyli, `modality=""`).
 - `sitk.GetArrayViewFromImage(x)` — `x` MUSI być w zmiennej do końca użycia widoku (widok nie
   trzyma obrazu; tymczasowy = śmieci w wyniku). Lekcja z E9.
+
+## Kreator — własne node'y (KONWENCJE)
+
+- Globalne: `custom_nodes/<slug>/{node.json, code.py}` (`custom/store.py`), typ `wlasne/<slug>`,
+  `NodeType.custom=True`; `domain` = dowolna kategoria (id zawsze `wlasne/…`). Manifest walidowany
+  w `custom/manifest.py` (identyfikatory = nazwy Pythona); `version` = hash kodu + gniazd (bez etykiet).
+- Kod użytkownika i całe jego API PO ANGIELSKU: `run(inputs, params, ctx)`, `Volume`, `ctx.progress/volume/
+  grid/table/mesh`, `test(result, inputs, params)`; identyfikatory gniazd/parametrów/slug — EN (etykiety PL).
+- Kod kompilowany leniwie (`custom/runtime.py`), fasada `inputs/params/ctx` + automatyczne opakowanie
+  wyniku wg rodzaju wyjścia; błąd → `CodeError` z linią w kodzie użytkownika. Każda zmiana → event
+  `node-types` (front przeładowuje paletę). Test (`custom/tester.py`) = zwykły ewaluator z
+  `extra_types` (szkic + fantom) i `fresh` (zawsze liczy) na torze `graph`.
+- Nowy rodzaj gniazda → dopisać do `manifest.PORT_KINDS`, konwersji w `Runtime._convert`, fantomu.
+- Biblioteki (`custom/packages.py`): paczki z PyPI do `<dane>/python_packages` (koniec `sys.path`).
+  pip zawsze w podprocesie (`pipmain.py`; zamrożony build: `sidecar --pip`): dry-run `--report`, potem
+  `--no-deps --target` tylko brakujących — wbudowanych numpy/scipy nie dublujemy ani nie podmieniamy.
+  Spec dołącza całą bibliotekę standardową i metadane wszystkich dystrybucji (pip i lista wersji).
+- `NodeType.run` może trzymać stan (lock) — `schema()` nie może go kopiować (`asdict` robi deepcopy;
+  lekcja z Kreatora: `/node-types` padał 500).
 
 ## Pomiary (KONWENCJE)
 

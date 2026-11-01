@@ -1,4 +1,5 @@
 import threading
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Request
@@ -73,6 +74,16 @@ _running: dict[tuple[str, str, str], Job] = {}
 _lock = threading.Lock()
 
 
+def evaluator_for(st: Any, wid: str, ws_dir: Path) -> Evaluator:
+    """One evaluator per workspace (its memo is shared by graphs and creator tests; all
+    of them run on the single `graph` lane)."""
+    with _lock:
+        ev = _evaluators.get(wid)
+        if ev is None or ev.ws_dir != ws_dir:
+            ev = _evaluators[wid] = Evaluator(wid, ws_dir, st.library, st.hub)
+        return ev
+
+
 @router.post("/workspaces/{wid}/graphs/{gid}/evaluate")
 def evaluate(request: Request, wid: str, gid: str, body: dict = Body(...)) -> dict:
     """Evaluate the posted graph state (not the saved file — no save/eval race). A newer
@@ -83,10 +94,8 @@ def evaluate(request: Request, wid: str, gid: str, body: dict = Body(...)) -> di
     quality = "full" if body.get("quality") == "full" else "preview"
     graph = body.get("graph") or {}
     targets = [str(t) for t in body.get("targets", [])]
+    ev = evaluator_for(st, wid, ws_dir)
     with _lock:
-        ev = _evaluators.get(wid)
-        if ev is None or ev.ws_dir != ws_dir:
-            ev = _evaluators[wid] = Evaluator(wid, ws_dir, st.library, st.hub)
         prev = _running.get((wid, gid, quality))
     if prev is not None:
         st.jobs.cancel(prev.id)

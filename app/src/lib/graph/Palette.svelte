@@ -71,7 +71,7 @@
           >
             <i style:background={DOMAIN_COLOR[t.domain]}></i>
             <span>{t.label}</span>
-            <small>{STAGES[t.stage]}</small>
+            <small class:own={t.custom}>{t.custom ? "własny" : STAGES[t.stage]}</small>
           </div>
         {/each}
       {/each}
@@ -151,6 +151,9 @@
   }
   .item span {
     flex: 1;
+  }
+  small.own {
+    color: var(--accent);
   }
   small {
     font-size: 0.56rem;

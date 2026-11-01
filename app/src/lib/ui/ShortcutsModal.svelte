@@ -73,6 +73,22 @@
       ],
     },
     {
+      id: "kreator",
+      title: "Kreator",
+      groups: [
+        {
+          title: "Własne node'y",
+          items: [
+            ["⌘/Ctrl + S", "Zapisz node (trafia do palety Sceny)"],
+            ["⌘/Ctrl + Enter", "Testuj"],
+            ["Ctrl + Spacja (w kodzie)", "Podpowiedzi: wej. / par. / ctx. / pola wolumenu"],
+            ["Tab / Shift + Tab", "Wcięcie"],
+            ["⌘/Ctrl + F", "Szukaj w kodzie"],
+          ],
+        },
+      ],
+    },
+    {
       id: "tablica",
       title: "Tablica",
       groups: [
@@ -110,7 +126,7 @@
     if (open && e.key === "Escape") {
       e.stopPropagation();
       closeShortcuts();
-    } else if (e.key === "?" && t !== "INPUT" && t !== "TEXTAREA" && !e.metaKey && !e.ctrlKey) {
+    } else if (e.key === "?" && t !== "INPUT" && t !== "TEXTAREA" && !(e.target as HTMLElement)?.isContentEditable && !e.metaKey && !e.ctrlKey) {
       if (open) closeShortcuts();
       else openShortcuts("all");
     }

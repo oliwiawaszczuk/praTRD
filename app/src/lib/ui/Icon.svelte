@@ -30,6 +30,10 @@
     note: "M5 4h10l4 4v12H5zM14 4v5h5M8 13h8M8 16h5",
     mesh: "M3 18L8 6l5 12zM8 6h10l-5 12M18 6l3 12h-8",
     export: "M12 15V4M8 8l4-4 4 4M5 13v7h14v-7",
+    input: "M10 17l5-5-5-5M15 12H3M14 4h5a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-5",
+    output: "M14 17l5-5-5-5M19 12H8M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5",
+    sliders: "M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4",
+    package: "M3 8l9-5 9 5v8l-9 5-9-5zM3 8l9 5 9-5M12 13v8M7.5 5.5l9 5",
   } as const;
   export type IconName = keyof typeof PATHS;
 </script>

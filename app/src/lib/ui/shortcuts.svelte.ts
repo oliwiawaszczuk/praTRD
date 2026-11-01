@@ -1,6 +1,6 @@
 // The keyboard-shortcuts window (one for the whole app; "?" opens it anywhere).
 
-export type ShortcutSection = "scena" | "graf" | "tablica" | "ogolne";
+export type ShortcutSection = "scena" | "graf" | "kreator" | "tablica" | "ogolne";
 
 let open = $state<ShortcutSection | "all" | null>(null);
 

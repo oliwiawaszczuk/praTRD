@@ -34,6 +34,7 @@ const waiters = new Map<string, ((j: Job) => void)[]>();
 const stale = new Set<string>();
 const libraryListeners = new Set<(wid: string) => void>();
 const typedListeners = new Map<string, Set<(msg: Record<string, unknown>) => void>>();
+const progressListeners = new Map<string, Set<(message: string, progress: number) => void>>();
 
 const terminal = (s: JobState) => s === "done" || s === "error" || s === "cancelled";
 
@@ -58,6 +59,7 @@ function onMessage(msg: Msg): void {
   } else if (msg.type === "job") {
     const job = (msg as { job: Job }).job;
     jobs[job.id] = job;
+    for (const l of progressListeners.get(job.id) ?? []) l(job.message, job.progress);
     settle(job);
   } else if (msg.type === "library") {
     for (const l of libraryListeners) l((msg as { wid: string }).wid);
@@ -89,6 +91,17 @@ export function connectEvents(): void {
 export const allJobs = (): Job[] => Object.values(jobs).sort((a, b) => b.created - a.created);
 export const eventsConnected = (): boolean => connected;
 export const isStaleJob = (id: string): boolean => stale.has(id);
+
+/** Live message/progress of one job (e.g. pip output in the Kreator library panel). */
+export function onJobProgress(id: string, cb: (message: string, progress: number) => void): () => void {
+  let set = progressListeners.get(id);
+  if (!set) progressListeners.set(id, (set = new Set()));
+  set.add(cb);
+  return () => {
+    set!.delete(cb);
+    if (!set!.size) progressListeners.delete(id);
+  };
+}
 
 export function waitJob(id: string): Promise<Job> {
   const known = jobs[id];

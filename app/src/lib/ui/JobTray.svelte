@@ -18,8 +18,9 @@
 
   const visible = $derived(
     allJobs().filter((j) => {
-      // scans and graph runs report in place (import dialog / node cards / graph toolbar)
-      if (dismissed.has(j.id) || j.kind === "scan" || j.kind === "graph" || isStaleJob(j.id)) return false;
+      // scans, graph runs and Kreator tests report in place (import dialog / node cards /
+      // graph toolbar / test panel)
+      if (dismissed.has(j.id) || j.kind === "scan" || j.kind === "graph" || j.kind === "node-test" || j.kind === "pip" || isStaleJob(j.id)) return false;
       if (j.state === "running" || j.state === "queued" || j.state === "error") return true;
       if (!finishedAt.has(j.id)) finishedAt.set(j.id, now);
       return now - (finishedAt.get(j.id) ?? now) < LINGER_MS;

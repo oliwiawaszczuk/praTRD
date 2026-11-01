@@ -13,6 +13,7 @@
   import { scanPaths } from "#lib/tabs/dane/importFlow.svelte.ts";
   import Dane from "#lib/tabs/dane/Dane.svelte";
   import Scena from "#lib/tabs/scena/Scena.svelte";
+  import Kreator from "#lib/tabs/kreator/Kreator.svelte";
   import { flushGraph } from "#lib/graph/store.svelte.ts";
   import JobTray from "#lib/ui/JobTray.svelte";
   import LoadingBar from "#lib/ui/LoadingBar.svelte";
@@ -43,6 +44,7 @@
   const TABS: { key: Tab; label: string }[] = [
     { key: "dane", label: "Dane" },
     { key: "scena", label: "Scena" },
+    { key: "kreator", label: "Kreator" },
     { key: "tablica", label: "Tablica" },
     { key: "notatki", label: "Notatki" },
     { key: "dokumentacja", label: "Dokumentacja" },
@@ -54,6 +56,7 @@
   const COMPONENTS: Partial<Record<Tab, Component>> = {
     dane: Dane,
     scena: Scena,
+    kreator: Kreator,
     tablica: Tablica,
     notatki: Notatki,
     dokumentacja: Dokumentacja,

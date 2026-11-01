@@ -16,6 +16,7 @@
   import { openTable } from "./tableView.svelte.ts";
   import { nodeDoc, requestDocSection } from "#lib/tabs/dokumentacja/appdocs.svelte.ts";
   import { goToTab } from "#lib/core/nav.svelte.ts";
+  import { openNode } from "#lib/tabs/kreator/kreator.svelte.ts";
   import type { TableValue } from "./tables.ts";
   import { num } from "#lib/ui/format.ts";
   import { DOMAIN_COLOR } from "./registry.svelte.ts";
@@ -135,6 +136,19 @@
         onclick={() => openTable(node.id, tabPort.id)}
       >
         <Icon name="table" size={13} />
+      </button>
+    {/if}
+    {#if type.custom}
+      <button
+        class="info"
+        title="Edytuj w Kreatorze"
+        onpointerdown={(e) => e.stopPropagation()}
+        onclick={() => {
+          goToTab("kreator");
+          void openNode(type.id.slice("wlasne/".length)).catch((e) => showError("Nie udało się otworzyć", e));
+        }}
+      >
+        <Icon name="edit" size={12} />
       </button>
     {/if}
     <button

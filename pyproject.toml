@@ -21,6 +21,7 @@ dependencies = [
     "websockets>=15",
     "pillow>=11",
     "fast-simplification>=0.2.0",
+    "pip>=24",  # Kreator: extra packages for user nodes (python_packages)
 ]
 
 [dependency-groups]

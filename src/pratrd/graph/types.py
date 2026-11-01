@@ -5,11 +5,11 @@ parameter widgets from `GET /node-types` (the schema produced here).
 """
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal
 
 PortKind = Literal["wolumen", "segmentacja", "segment", "punkty", "tabela", "liczba", "mesh"]
-Domain = Literal["wolumen", "filtry", "segmentacja", "pomiary", "mesh"]
+Domain = Literal["wolumen", "filtry", "segmentacja", "pomiary", "mesh", "wlasne"]
 Stage = Literal["dane", "przetwarzanie", "wynik"]
 # "points": [[x,y,z] mm, …] (e.g. seeds clicked in a view);
 # "strokes": brush spheres {"p": [[x,y,z], …], "r": mm, "mode": "add"|"erase"} and scissors
@@ -28,6 +28,7 @@ DOMAIN_LABELS: dict[str, str] = {
     "segmentacja": "Segmentacja",
     "pomiary": "Pomiary i statystyki",
     "mesh": "Mesh",
+    "wlasne": "Własne",
 }
 
 
@@ -70,9 +71,11 @@ class NodeType:
     # custom editor in the UI instead of generic param widgets (e.g. "cropbox": 3-D box modal)
     widget: str = ""
     version: int = 1  # bump when the algorithm changes → old cached results are not reused
+    custom: bool = False  # user-defined in the node creator (id "wlasne/<slug>")
 
     def schema(self) -> dict[str, Any]:
-        d = asdict(self)
+        # asdict deep-copies every field: `run` may hold state (a user node's runtime + lock)
+        d = asdict(replace(self, run=None))
         d.pop("run")
         for p in d["params"]:
             p["options"] = [{"value": v, "label": lbl} for v, lbl in p["options"]]
@@ -125,6 +128,10 @@ def register(nt: NodeType) -> NodeType:
         raise ValueError(f"duplicate node type {nt.id}")
     REGISTRY[nt.id] = nt
     return nt
+
+
+def unregister(type_id: str) -> None:
+    REGISTRY.pop(type_id, None)
 
 
 def schema() -> dict[str, Any]:

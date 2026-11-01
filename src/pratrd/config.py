@@ -35,6 +35,10 @@ class Config:
     def app_docs_file(self) -> Path:
         return self.root / "app_docs.json"
 
+    @property
+    def custom_nodes_dir(self) -> Path:
+        return self.root / "custom_nodes"
+
 
 def from_env() -> Config:
     root = Path(os.environ.get("PRATRD_ROOT", Path.cwd())).resolve()

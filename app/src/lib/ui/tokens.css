@@ -45,6 +45,15 @@
   --port-liczba: #90a4ae;
   --port-mesh: #4db6ac;
   --port-transformacja: #c0ca33;
+  /* Kreator: node parameters (one colour on the card, the chips and in the code) */
+  --param: #89ddff;
+
+  /* code editor (Kreator) */
+  --code-keyword: #c792ea;
+  --code-string: #c3e88d;
+  --code-number: #f78c6c;
+  --code-function: #82aaff;
+  --code-self: #f07178;
 
   --font: "JetBrains Mono", ui-monospace, monospace;
   --fs-xs: 0.66rem;

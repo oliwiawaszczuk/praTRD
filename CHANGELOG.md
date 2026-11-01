@@ -2,6 +2,19 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/), wersje: [SemVer](https://semver.org/).
 
+## [Unreleased] — Kreator: własne node'y
+
+- **Nowa zakładka Kreator** — własny node = karta + kod w Pythonie. Karta budowana na żywo: nazwa w nagłówku, kategoria (chip), gniazda „+ wejście / + wyjście” (kolor = rodzaj, klik zmienia; *opc*, *[ ]* wiele), parametry (liczba / całkowita / tak-nie / wybór) z podglądem suwaka, lekki/ciężki, opis.
+- **Kod:** `def run(wej, par, ctx)`; `wej.<id>` = Wolumen (`.array`, `.spacing`, `.to_mm`…) / Mesh / tabela / punkty / liczba. Wynik opakowywany sam: tablica o kształcie wejścia → wolumen / segment (bool) / segmentacja, `(verts, faces)` → mesh, lista słowników → tabela. `ctx.postep`, `ctx.wolumen`, `ctx.geometria`, `ctx.tabela`, `ctx.mesh`.
+- Edytor CodeMirror (ładowany leniwie): podpowiedzi `wej.` / `par.` / `ctx.` i pól wolumenu, błąd składni na żywo przy linii, ⌘S zapis, ⌘↵ test. Szablony: Pusty, Próg, Filtr (Gauss w mm), Statystyka, Mesh.
+- **Test** na fantomie (anizotropowy woksel), serii z biblioteki albo wyniku node'a z otwartego grafu: kontrole (wyjścia, NaN/Inf, pusta / pełna maska, stały wolumen, zmiana typu, czas), własne `def test(wynik, wej, par)`, podgląd każdego wyjścia, konsola `print()` i ostrzeżeń numpy, traceback → linia w kodzie.
+- Zapis rejestruje node jako `wlasne/<id>` bez restartu (paleta odświeża się na evencie); wersja = hash kodu i gniazd, więc zmiana kodu unieważnia cache. Szkic przetrwa restart appki. Eksport / import pliku `.pratrdnode` (zajęta nazwa = pytanie, nigdy nadpisanie).
+- Graf: karta „Brak node'a” dla usuniętego typu (zamiast znikania), krawędzie do usuniętych gniazd nie są rysowane; ołówek na karcie własnego node'a otwiera go w Kreatorze.
+- Poprawka: „?” wpisany w edytorze kodu nie otwiera listy skrótów.
+- **Kod po angielsku:** `run(inputs, params, ctx)`, `ctx.progress / volume / grid / table / mesh`, `test(result, inputs, params)`; nowe gniazda i parametry dostają angielskie nazwy (`image`, `mask`, `value`…), szablony i szkielet po angielsku. Etykiety na karcie zostają po polsku.
+- **Karta: trzy strefy** — Wejścia (`inputs.*`), Wyjścia (`return`), Parametry (`params.*`, turkus) z ikonami i nazwą w kodzie pod każdą etykietą; te same kolory w kodzie (gniazdo = kolor rodzaju, parametr = turkus), nieznana nazwa podkreślona na czerwono.
+- **Biblioteki:** panel nad kodem — wbudowane (klik dopisuje `import`) i doinstalowanie dowolnej paczki z PyPI do folderu danych appki (bez podmiany wbudowanych numpy/scipy; konflikt wersji = ostrzeżenie); brakujący import w teście → „Zainstaluj …” i test od nowa. Podpowiedzi `import` w edytorze. Działa też w zamrożonym buildzie (`sidecar --pip`).
+
 ## [Unreleased] — Scena: warstwy, Dane: foldery
 
 - **Warstwy sceny** zamiast wyboru wolumenu w prawym panelu: oczko na karcie dodaje/usuwa warstwę; w panelu kolejność (przeciąganie ⋮⋮), ukrywanie, aktywna warstwa (klik) i rola (tło / nakładka / powierzchnia). Segmentację można nałożyć na dowolny wolumen z grafu; kilka meshy naraz.
