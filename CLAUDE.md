@@ -35,7 +35,7 @@ cd app/src-tauri && cargo clippy -- -D warnings               # Rust (też z --f
 
 ```
 app/src-tauri/   Rust: wybiera wolny port → spawn sidecara (env PRATRD_ROOT/PORT/PARENT_PID),
-                 komenda `sidecar_port`, menu Workspace, close/Cmd+Q → event `close-requested`
+                 komenda `sidecar_port`, `opened.rs` (pliki od systemu: `open -a`, praBada → `files-opened` → skan jak drop), menu Workspace, close/Cmd+Q → event `close-requested`
                  → front flushuje zapisy → `window.destroy()` → Exit → kill sidecara.
 app/src/lib/
   core/          api.ts (port z Tauri, getJson/sendJson), workspace.svelte.ts (wsGet/wsSet),

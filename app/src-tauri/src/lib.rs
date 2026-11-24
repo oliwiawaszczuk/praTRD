@@ -1,3 +1,5 @@
+mod opened;
+
 use std::fs::File;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -140,7 +142,8 @@ pub fn run() {
         .manage(Sidecar(Mutex::new(None)))
         .manage(SidecarPort(pick_port()))
         .manage(CloseRequested(AtomicBool::new(false)))
-        .invoke_handler(tauri::generate_handler![sidecar_port])
+        .manage(opened::Opened::default())
+        .invoke_handler(tauri::generate_handler![sidecar_port, opened::opened_take])
         .setup(|app| {
             let port = app.state::<SidecarPort>().0;
             match spawn_sidecar(app.handle(), port) {
@@ -198,6 +201,8 @@ pub fn run() {
             }
         }
         RunEvent::Exit => stop_sidecar(app),
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => opened::push(app, &app.state::<opened::Opened>(), &urls),
         _ => {}
     });
 }

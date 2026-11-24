@@ -53,6 +53,20 @@ export async function onFileDrop(cb: {
   });
 }
 
+/** Files / folders handed over by the system (Finder, `open -a`, praBada). They can arrive before the
+ * page listens: the event only says "look", the paths are taken once with `takeOpened`. */
+export async function takeOpened(): Promise<string[]> {
+  if (!inTauri()) return [];
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string[]>("opened_take");
+}
+
+export async function onOpened(cb: () => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("files-opened", cb);
+}
+
 export type MenuAction = "new" | "open" | "import" | "export";
 
 export async function onWorkspaceMenu(cb: (a: MenuAction) => void): Promise<() => void> {

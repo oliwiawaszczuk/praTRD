@@ -7,7 +7,7 @@
   import { waitForSidecar } from "#lib/core/api.svelte.ts";
   import { flushWorkspace, loadWorkspaces, wsGet, wsSet } from "#lib/core/workspace.svelte.ts";
   import { flushAppSettings, loadAppSettings } from "#lib/core/appSettings.svelte.ts";
-  import { onCloseRequested, onFileDrop, onWorkspaceMenu } from "#lib/core/tauri.ts";
+  import { onCloseRequested, onFileDrop, onOpened, onWorkspaceMenu, takeOpened } from "#lib/core/tauri.ts";
   import { connectEvents } from "#lib/core/events.svelte.ts";
   import { loadLibrary } from "#lib/core/library.svelte.ts";
   import { scanPaths } from "#lib/tabs/dane/importFlow.svelte.ts";
@@ -102,10 +102,20 @@
       const saved = wsGet<Tab>("activeTab", "dane");
       selectTab(TABS.some((t) => t.key === saved) ? saved : "dane");
       boot = "ready";
+      void openExternal();
     } catch (e) {
       errorMsg = e instanceof Error ? e.message : String(e);
       boot = "error";
     }
+  }
+
+  // Same path as a drop onto the window: the files / folders are scanned into the library.
+  async function openExternal(): Promise<void> {
+    if (boot !== "ready") return;
+    const paths = await takeOpened();
+    if (!paths.length) return;
+    selectTab("dane");
+    void scanPaths(paths);
   }
 
   onMount(() => {
@@ -121,6 +131,7 @@
         else exportWorkspaceFlow();
       }),
       onCloseRequested(flushAll),
+      onOpened(() => void openExternal()),
       onFileDrop({
         over: (on) => (dropping = on && boot === "ready"),
         drop: (paths) => {
